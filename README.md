@@ -56,9 +56,9 @@ npm run tauri dev
 - [x] 双端工程初始化
 - [x] 应用名与包名统一
 - [x] 移动端 new-api 客户端
-- [ ] 移动端看板 UI
-- [ ] 桌面端登录与看板 UI
-- [ ] 桌面端悬浮余额窗
+- [x] 移动端看板 UI
+- [x] 桌面端登录与看板 UI
+- [x] 桌面端悬浮余额窗
 
 ---
 
@@ -120,6 +120,6 @@ npm run tauri dev
 - [x] Project scaffolding for both clients
 - [x] Unified application name and package IDs
 - [x] Mobile new-api client
-- [ ] Mobile dashboard UI
-- [ ] Desktop login and dashboard UI
-- [ ] Desktop floating balance window
+- [x] Mobile dashboard UI
+- [x] Desktop login and dashboard UI
+- [x] Desktop floating balance window

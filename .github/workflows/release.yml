@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-desktop:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+            artifact: windows-x86_64
+          - os: macos
+            arch: arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundle: dmg
+            artifact: macos-arm64
+          - os: macos
+            arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundle: dmg
+            artifact: macos-x86_64
+          - os: linux
+            arch: x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundle: appimage
+            artifact: linux-x86_64
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundle: appimage
+            artifact: linux-arm64
+    env:
+      APP_NAME: NewApiApp
+      VERSION: ${{ github.ref_name }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libssl-dev libxdo-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust target
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installer
+        run: npm run tauri build -- --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"
+
+      - name: Ad-hoc sign DMG
+        if: matrix.os == 'macos'
+        run: |
+          DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
+          test -n "${DMG}"
+          codesign --force --sign - "${DMG}"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  package-mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build mobile Docker image and tar packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          docker build -t newapi-app-mobile:"${VERSION}" -t newapi-app-mobile:latest ./mobile
+          docker save newapi-app-mobile:"${VERSION}" | gzip > "dist/newapi-app-mobile-${VERSION}-docker.tar.gz"
+          tar -czf "dist/newapi-app-mobile-${VERSION}-source.tar.gz" \
+            --exclude='./mobile/node_modules' \
+            --exclude='./mobile/android/.gradle' \
+            --exclude='./mobile/ios/Pods' \
+            --exclude='./.git' \
+            -C . mobile
+
+      - name: Upload mobile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build-desktop, package-mobile]
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > ../checksums.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release-assets/* checksums.txt --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${TAG}" release-assets/* checksums.txt --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --generate-notes
+          fi

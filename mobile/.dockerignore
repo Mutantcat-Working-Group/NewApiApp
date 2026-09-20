@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+dist
+.git
+.gradle
+build
+Pods
+DerivedData
+*.xcuserstate
+.DS_Store
+coverage

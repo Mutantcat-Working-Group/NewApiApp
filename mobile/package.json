@@ -1,6 +1,6 @@
 {
   "name": "new-api-app",
-  "version": "1.0.20260920",
+  "version": "1.0.20260921",
   "private": true,
   "scripts": {
     "android": "react-native run-android",

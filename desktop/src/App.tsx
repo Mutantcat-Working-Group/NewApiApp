@@ -9,8 +9,19 @@ import { NewApiClient, loadSession, saveSession } from './api';
 import type { StoredSession } from './api';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from './types';
 
+function currentWindowLabel(): string | null {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+    return null;
+  }
+  try {
+    return getCurrentWebviewWindow().label;
+  } catch {
+    return null;
+  }
+}
+
 function App() {
-  const isBalanceWindow = getCurrentWebviewWindow().label === 'balance';
+  const isBalanceWindow = currentWindowLabel() === 'balance';
 
   return (
     <ConfigProvider

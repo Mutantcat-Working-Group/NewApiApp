@@ -1,0 +1,6 @@
+# Local tool artifacts
+.playwright-cli/
+.DS_Store
+
+# Dependencies and build output (per-project .gitignore covers the rest)
+node_modules/

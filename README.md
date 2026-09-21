@@ -9,7 +9,7 @@
 - 面向 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 的双端客户端工具。
 - 支持填写中转站根地址、账号和密码，通过 new-api 面板 REST API 接入。
 - 登录会话本地持久化，访问令牌过期后自动刷新。
-- 桌面端支持查看账号余额、用量和令牌，后续提供常驻悬浮余额窗。
+- 桌面端支持查看账号余额、用量和令牌，并提供常驻悬浮余额窗。
 - 移动端采用看板式界面，便于随时查看余额、请求统计和令牌状态。
 
 ### 二、技术栈
@@ -73,7 +73,7 @@ npm run tauri dev
 - A desktop and mobile client for the QuantumNous new-api panel.
 - Configure the relay root URL, username and password, then connect through the new-api panel REST API.
 - Sessions are persisted locally and access tokens are refreshed automatically when expired.
-- The desktop client shows balance, usage and tokens, with a floating balance window planned.
+- The desktop client shows balance, usage and tokens, plus an always-on-top floating balance window.
 - The mobile client uses a dashboard layout for quick access to balance, request statistics and tokens.
 
 ### Tech Stack

@@ -3,6 +3,7 @@
  */
 
 import React from 'react';
+import { Text } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 import App from '../App';
 import { formatQuota } from '../src/api';
@@ -40,7 +41,7 @@ test('renders the login form when no session is stored', async () => {
   await ReactTestRenderer.act(async () => {
     tree = ReactTestRenderer.create(<App />);
   });
-  const texts = tree!.root.findAllByType('Text').map((node) => node.props.children);
+  const texts = tree!.root.findAllByType(Text).map((node) => node.props.children);
   expect(texts).toContain('NewApiApp');
   expect(texts).toContain('登录');
 });

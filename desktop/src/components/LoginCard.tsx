@@ -11,9 +11,11 @@ type LoginFormValues = {
 
 type LoginCardProps = {
   onLoggedIn: () => void;
+  /** Why the previous session ended, so the login screen can explain itself. */
+  notice?: string;
 };
 
-export default function LoginCard({ onLoggedIn }: LoginCardProps) {
+export default function LoginCard({ onLoggedIn, notice }: LoginCardProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [form] = Form.useForm<LoginFormValues>();
@@ -50,6 +52,9 @@ export default function LoginCard({ onLoggedIn }: LoginCardProps) {
           填写中转站根地址，使用面板账号密码登录，即可查看余额、用量与令牌。
         </Typography.Paragraph>
         {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} /> : null}
+        {notice ? (
+          <Alert type="error" showIcon message={notice} style={{ marginBottom: 16 }} />
+        ) : null}
         <Form<LoginFormValues>
           form={form}
           layout="vertical"

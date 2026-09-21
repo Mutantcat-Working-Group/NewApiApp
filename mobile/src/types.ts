@@ -11,6 +11,32 @@ export type NewApiStatus = {
   password_login_enabled: boolean;
   password_login_encryption_enabled: boolean;
   register_enabled: boolean;
+  turnstile_check: boolean;
+};
+
+export type VerificationMethod = {
+  method: string;
+  available: boolean;
+  reason?: string;
+};
+
+/** 站点开启登录验证时 /api/user/login 的返回体（2FA / 通行密钥等）。 */
+export type LoginChallenge = {
+  require_verification: boolean;
+  flow_token: string;
+  expires_at: number;
+  methods: VerificationMethod[];
+};
+
+export type EncryptionKeyInfo = {
+  enabled: boolean;
+  kid?: string;
+  public_key?: string;
+};
+
+export type LogoutResult = {
+  revoked_sid: string;
+  cookie_cleared: boolean;
 };
 
 export type SelfUser = {

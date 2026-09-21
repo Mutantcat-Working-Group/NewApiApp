@@ -7,7 +7,7 @@ import { StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import DashboardScreen from './src/components/DashboardScreen';
 import LoginForm from './src/components/LoginForm';
-import { NewApiClient, loadSession, saveSession } from './src/api';
+import { NewApiClient, SessionExpiredError, loadSession, saveSession } from './src/api';
 import type { StoredSession } from './src/api';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from './src/types';
 import { colors } from './src/theme';
@@ -62,8 +62,23 @@ function AppContent() {
         setUser(nextUser);
         setTokens(nextTokens);
         setLogStat(nextStat);
-        await saveSession({ ...activeSession, user: nextUser });
+        // Merge into whatever is stored now: a refresh triggered by one of the
+        // requests above may have rotated the tokens, and this snapshot is stale.
+        const stored = await loadSession();
+        if (stored) {
+          await saveSession({ ...stored, user: nextUser });
+        }
       } catch (loadError) {
+        if (loadError instanceof SessionExpiredError) {
+          await saveSession(null);
+          setSession(null);
+          setStatus(null);
+          setUser(null);
+          setLogStat(null);
+          setTokens([]);
+          setError('登录状态已失效，请重新登录');
+          return;
+        }
         setError(loadError instanceof Error ? loadError.message : String(loadError));
       } finally {
         setLoading(false);
@@ -87,7 +102,9 @@ function AppContent() {
 
   const handleLogout = useCallback(() => {
     void (async () => {
-      await saveSession(null);
+      if (session) {
+        await new NewApiClient(session.baseUrl).logout();
+      }
       setSession(null);
       setStatus(null);
       setUser(null);
@@ -95,7 +112,7 @@ function AppContent() {
       setTokens([]);
       setError('');
     })();
-  }, []);
+  }, [session]);
 
   const handleLoggedIn = useCallback(() => {
     void (async () => {
@@ -109,7 +126,7 @@ function AppContent() {
   }
 
   if (!session) {
-    return <LoginForm onLoggedIn={handleLoggedIn} />;
+    return <LoginForm onLoggedIn={handleLoggedIn} notice={error} />;
   }
 
   return (

@@ -15,9 +15,11 @@ import { colors, radius, spacing } from '../theme';
 
 export type LoginFormProps = {
   onLoggedIn: () => void;
+  /** Why the previous session ended, so the login screen can explain itself. */
+  notice?: string;
 };
 
-export default function LoginForm({ onLoggedIn }: LoginFormProps) {
+export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
   const [baseUrl, setBaseUrl] = useState('https://');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -73,6 +75,11 @@ export default function LoginForm({ onLoggedIn }: LoginFormProps) {
           {error ? (
             <View style={styles.alert}>
               <Text style={styles.alertText}>{error}</Text>
+            </View>
+          ) : null}
+          {notice ? (
+            <View style={styles.alert}>
+              <Text style={styles.alertText}>{notice}</Text>
             </View>
           ) : null}
 

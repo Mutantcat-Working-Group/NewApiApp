@@ -34,6 +34,7 @@ const status: NewApiStatus = {
   password_login_enabled: true,
   password_login_encryption_enabled: false,
   register_enabled: false,
+  turnstile_check: false,
 };
 
 test('renders the login form when no session is stored', async () => {

@@ -5,7 +5,7 @@ import { getCurrentWebviewWindow, WebviewWindow } from '@tauri-apps/api/webviewW
 import Dashboard from './components/Dashboard';
 import FloatingBalance from './components/FloatingBalance';
 import LoginCard from './components/LoginCard';
-import { NewApiClient, loadSession, saveSession } from './api';
+import { NewApiClient, SessionExpiredError, loadSession, saveSession } from './api';
 import type { StoredSession } from './api';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from './types';
 
@@ -65,8 +65,23 @@ function MainApp() {
       setUser(nextUser);
       setTokens(nextTokens);
       setLogStat(nextStat);
-      saveSession({ ...session, user: nextUser });
+      // Merge into whatever is stored now: a refresh triggered by one of the
+      // requests above may have rotated the tokens, and this snapshot is stale.
+      const stored = loadSession();
+      if (stored) {
+        saveSession({ ...stored, user: nextUser });
+      }
     } catch (loadError) {
+      if (loadError instanceof SessionExpiredError) {
+        saveSession(null);
+        setSession(null);
+        setStatus(null);
+        setUser(null);
+        setLogStat(null);
+        setTokens([]);
+        setError(loadError.message);
+        return;
+      }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
       setLoading(false);
@@ -83,15 +98,16 @@ function MainApp() {
     setSession(loadSession());
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     if (session) {
-      new NewApiClient(session.baseUrl).logout();
+      await new NewApiClient(session.baseUrl).logout();
     }
     setSession(null);
     setStatus(null);
     setUser(null);
     setLogStat(null);
     setTokens([]);
+    setError('');
   }
 
   async function handleOpenFloatingWindow() {
@@ -122,7 +138,7 @@ function MainApp() {
   }
 
   if (!session) {
-    return <LoginCard onLoggedIn={handleLoggedIn} />;
+    return <LoginCard onLoggedIn={handleLoggedIn} notice={error} />;
   }
 
   return (

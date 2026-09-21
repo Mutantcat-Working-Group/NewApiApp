@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 
-ARG VERSION=1.0.20260922
+ARG VERSION=1.0.20260923
 ENV APP_VERSION=${VERSION}
 
 COPY package.json package-lock.json ./
@@ -20,7 +20,7 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
 
-ARG VERSION=1.0.20260922
+ARG VERSION=1.0.20260923
 ENV APP_VERSION=${VERSION}
 
 COPY --from=build /app/package.json /app/package-lock.json /app/app.json /app/babel.config.js /app/index.js /app/jest.config.js /app/metro.config.js /app/tsconfig.json /app/App.tsx ./

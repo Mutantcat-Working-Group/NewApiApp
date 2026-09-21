@@ -1,6 +1,6 @@
 [package]
 name = "newapi_desktop"
-version = "1.0.20260921"
+version = "1.0.20260920"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"

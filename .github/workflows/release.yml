@@ -116,8 +116,38 @@ jobs:
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle }}/${{ matrix.pattern }}
           if-no-files-found: error
 
+  package-mobile:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build mobile Docker image and tar packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          docker build -t newapi-app-mobile:"${VERSION}" -t newapi-app-mobile:latest ./mobile
+          docker save newapi-app-mobile:"${VERSION}" | gzip > "dist/newapi-app-mobile-${VERSION}-docker.tar.gz"
+          tar -czf "dist/newapi-app-mobile-${VERSION}-source.tar.gz" \
+            --exclude='./mobile/node_modules' \
+            --exclude='./mobile/android/.gradle' \
+            --exclude='./mobile/ios/Pods' \
+            --exclude='./.git' \
+            -C . mobile
+
+      - name: Upload mobile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile
+          path: dist/*
+          if-no-files-found: error
+
   publish:
-    needs: build-desktop
+    needs: [build-desktop, package-mobile]
     runs-on: ubuntu-22.04
     steps:
       - name: Download installers
@@ -136,8 +166,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          mapfile -t ASSETS < <(find release-assets -type f | sort)
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" release-assets/* checksums.txt --repo "${GITHUB_REPOSITORY}" --clobber
+            gh release upload "${TAG}" "${ASSETS[@]}" checksums.txt --repo "${GITHUB_REPOSITORY}" --clobber
           else
-            gh release create "${TAG}" release-assets/* checksums.txt --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --generate-notes
+            gh release create "${TAG}" "${ASSETS[@]}" checksums.txt --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --generate-notes
           fi

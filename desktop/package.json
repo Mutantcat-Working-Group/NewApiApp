@@ -1,7 +1,7 @@
 {
   "name": "newapi-desktop",
   "private": true,
-  "version": "1.0.20260921",
+  "version": "1.0.20260920",
   "type": "module",
   "scripts": {
     "dev": "vite",

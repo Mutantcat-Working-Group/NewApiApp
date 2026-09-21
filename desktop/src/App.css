@@ -60,20 +60,40 @@ body {
 
 .app-shell {
   min-height: 100%;
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px 32px 32px;
   background: #f4f6fa;
   overflow-y: auto;
-}
-
-.app-shell > .ant-row + .ant-card,
-.app-shell > .ant-alert + .ant-row {
-  margin-top: 0;
 }
 
 .app-header {
   border-radius: 10px;
   border: 1px solid #e8ebf1;
   box-shadow: 0 1px 2px rgba(23, 43, 77, 0.05);
+}
+
+.stat-card,
+.section-card {
+  border-radius: 10px;
+  border: 1px solid #e8ebf1;
+  box-shadow: 0 1px 2px rgba(23, 43, 77, 0.05);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.stat-card:hover,
+.section-card:hover {
+  box-shadow: 0 6px 18px rgba(23, 43, 77, 0.08);
+}
+
+.stat-card {
+  height: 100%;
+}
+
+.stat-card .ant-statistic-title,
+.section-card .ant-card-head-title {
+  color: #5a6b86;
 }
 
 .app-header-main {

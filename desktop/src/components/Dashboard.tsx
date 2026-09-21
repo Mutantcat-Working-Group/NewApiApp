@@ -148,28 +148,28 @@ export default function Dashboard({
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card className="stat-card" bordered={false} hoverable>
             <Statistic title="剩余额度" value={formatQuota(user?.quota ?? 0, status)} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card className="stat-card" bordered={false} hoverable>
             <Statistic title="已用额度" value={formatQuota(user?.used_quota ?? 0, status)} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card className="stat-card" bordered={false} hoverable>
             <Statistic title="请求次数" value={user?.request_count ?? 0} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card className="stat-card" bordered={false} hoverable>
             <Statistic title="令牌数量" value={tokens.length} />
           </Card>
         </Col>
       </Row>
 
-      <Card title="近 24 小时" style={{ marginTop: 16 }}>
+      <Card title="近 24 小时" className="section-card" bordered={false} hoverable>
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={8}>
             <Statistic title="消耗额度" value={formatQuota(logStat?.quota ?? 0, status)} />
@@ -183,7 +183,7 @@ export default function Dashboard({
         </Row>
       </Card>
 
-      <Card title="API 令牌" style={{ marginTop: 16 }}>
+      <Card title="API 令牌" className="section-card" bordered={false} hoverable>
         {tokens.length === 0 ? (
           <Empty description="暂无令牌" />
         ) : (
@@ -193,7 +193,7 @@ export default function Dashboard({
             dataSource={tokens}
             pagination={false}
             size="small"
-            scroll={{ y: 320 }}
+            scroll={{ y: 360 }}
           />
         )}
       </Card>

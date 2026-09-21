@@ -65,7 +65,7 @@ export default function DashboardScreen({
         <View style={styles.headerText}>
           <Text style={styles.appName}>NewApiApp</Text>
           <Text style={styles.siteName} numberOfLines={1}>
-            {status?.system_name || 'new-api'} · v{status?.version || '-'}
+            {status?.system_name || 'new-api'} · {status?.version || '-'}
           </Text>
         </View>
         <Text style={styles.logout} onPress={onLogout}>

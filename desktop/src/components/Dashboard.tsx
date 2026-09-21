@@ -108,7 +108,7 @@ export default function Dashboard({
             </Typography.Title>
             <Space size={8} wrap>
               <Tag color="blue">{status?.system_name || 'new-api'}</Tag>
-              <Typography.Text type="secondary">v{status?.version || '-'}</Typography.Text>
+              <Typography.Text type="secondary">{status?.version || '-'}</Typography.Text>
             </Space>
           </div>
           <Space wrap>

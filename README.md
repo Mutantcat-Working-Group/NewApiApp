@@ -78,8 +78,8 @@ npm run tauri dev
 推送一个与桌面端版本号一致的标签，GitHub Actions 会自动构建并发布 Release：
 
 ```sh
-git tag v1.0.20260921
-git push origin v1.0.20260921
+git tag v1.0.20260922
+git push origin v1.0.20260922
 ```
 
 标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。发布资产：
@@ -176,8 +176,8 @@ npm run tauri dev
 Push a tag that matches the desktop version and GitHub Actions builds and publishes the release:
 
 ```sh
-git tag v1.0.20260921
-git push origin v1.0.20260921
+git tag v1.0.20260922
+git push origin v1.0.20260922
 ```
 
 The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch. Release assets:

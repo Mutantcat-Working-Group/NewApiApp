@@ -45,6 +45,8 @@ npm install
 npm run tauri dev
 ```
 
+> macOS 打包说明：DMG 打包会调用 `SetFile`，该命令经由当前 Xcode 开发者目录解析。若本机选中了 Xcode 但从未接受许可协议，打包会在最后一步失败；此时脚本会自动把 `DEVELOPER_DIR` 指向 Command Line Tools 继续完成。想彻底恢复原状可执行 `sudo xcodebuild -license accept`。
+
 ### 六、接口清单
 - `GET /api/status`：获取站点状态、版本和额度展示配置
 - `GET /api/user/login/encryption-key`：获取登录密码加密公钥与密钥 ID
@@ -120,6 +122,8 @@ cd desktop
 npm install
 npm run tauri dev
 ```
+
+> macOS packaging note: DMG bundling calls `SetFile`, which resolves through the active Xcode developer directory. If Xcode is selected but its license has never been accepted, bundling fails at the very last step; the build script then points `DEVELOPER_DIR` at Command Line Tools and finishes the job. Run `sudo xcodebuild -license accept` to switch back for good.
 
 ### API Surface
 - `GET /api/status`: site status, version and quota display configuration

@@ -74,6 +74,25 @@ npm run tauri dev
 - [x] 令牌列表翻页聚合
 - [x] 登出时通知服务端吊销会话
 
+### 九、发布流程
+推送一个与桌面端版本号一致的标签，GitHub Actions 会自动构建并发布 Release：
+
+```sh
+git tag v1.0.20260921
+git push origin v1.0.20260921
+```
+
+标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。发布资产：
+
+| 平台 | 架构 | 格式 |
+| --- | --- | --- |
+| Windows | x86_64 | NSIS 安装包（`.exe`） |
+| macOS | Apple Silicon | ad-hoc 签名 DMG |
+| macOS | Intel | ad-hoc 签名 DMG |
+| Linux | x86_64 / arm64 | AppImage |
+
+另附一份 `checksums.txt`。标签可以带 `v` 前缀，也可以不带。
+
 ---
 
 ## English
@@ -151,3 +170,22 @@ npm run tauri dev
 - [x] Automatic access token refresh with session-expiry fallback to login
 - [x] Paged token list aggregation
 - [x] Session revocation on logout
+
+### Release
+Push a tag that matches the desktop version and GitHub Actions builds and publishes the release:
+
+```sh
+git tag v1.0.20260921
+git push origin v1.0.20260921
+```
+
+The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch. Release assets:
+
+| Platform | Architecture | Format |
+| --- | --- | --- |
+| Windows | x86_64 | NSIS installer (`.exe`) |
+| macOS | Apple Silicon | ad-hoc signed DMG |
+| macOS | Intel | ad-hoc signed DMG |
+| Linux | x86_64 / arm64 | AppImage |
+
+A `checksums.txt` ships alongside them. Tags work with or without the `v` prefix.

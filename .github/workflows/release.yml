@@ -165,21 +165,15 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
-      # AGP 9.x needs JDK 21.
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '17'
 
       # Autolinking and the JS bundle step need node_modules in place.
       - name: Install dependencies
         run: npm ci
-
-      - name: Install Android SDK packages
-        run: |
-          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
 
       - name: Build release APK
         working-directory: mobile/android

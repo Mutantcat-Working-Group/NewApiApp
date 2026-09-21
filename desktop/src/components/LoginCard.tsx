@@ -40,7 +40,7 @@ export default function LoginCard({ onLoggedIn, notice }: LoginCardProps) {
     <div className="login-shell">
       <Card className="login-card" bordered={false}>
         <div className="login-brand">
-          <span className="login-logo">N</span>
+          <img src="/icon.png" alt="NewApiApp" className="login-logo" />
           <div>
             <Typography.Title level={3} style={{ margin: 0 }}>
               NewApiApp

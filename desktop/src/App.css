@@ -50,14 +50,10 @@ body {
   height: 44px;
   flex: 0 0 44px;
   border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #2f6fed;
-  color: #ffffff;
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1;
+  display: block;
+  background: #ffffff;
+  padding: 4px;
+  object-fit: contain;
 }
 
 /* ---------- 看板页 ---------- */

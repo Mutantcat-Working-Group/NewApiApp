@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -64,9 +65,7 @@ export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
         keyboardDismissMode="on-drag"
       >
         <View style={styles.brand}>
-          <View style={styles.logo}>
-            <Text style={styles.logoText}>N</Text>
-          </View>
+          <Image source={require('../assets/icon.png')} style={styles.logo} resizeMode="contain" />
           <Text style={styles.title}>NewApiApp</Text>
           <Text style={styles.subtitle}>new-api 中转站移动客户端</Text>
         </View>
@@ -160,15 +159,8 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: radius.md,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#ffffff',
     marginBottom: spacing.sm,
-  },
-  logoText: {
-    color: '#ffffff',
-    fontSize: 28,
-    fontWeight: '700',
   },
   title: {
     fontSize: 24,

@@ -71,6 +71,7 @@ def enableProguardInReleaseBuilds = false
  * this variant is about 6MiB larger per architecture than default.
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+def appVersion = new groovy.json.JsonSlurper().parse(new File(rootProject.projectDir, "../package.json")).version as String
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -84,7 +85,6 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Keep the Android version in sync with mobile/package.json, which the
         // release pipeline tags and ships.
-        def appVersion = new groovy.json.JsonSlurper().parse(new File("../../package.json")).version as String
         versionName appVersion
         versionCode Math.min(appVersion.replaceAll("[^0-9]", "").toBigInteger().longValue(), 2100000000L).toInteger()
     }

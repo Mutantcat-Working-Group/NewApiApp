@@ -82,8 +82,11 @@ android {
         applicationId "org.mutantcat.newapiapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Keep the Android version in sync with mobile/package.json, which the
+        // release pipeline tags and ships.
+        def appVersion = new groovy.json.JsonSlurper().parse(new File("../../package.json")).version as String
+        versionName appVersion
+        versionCode Math.min(appVersion.replaceAll("[^0-9]", "").toBigInteger().longValue(), 2100000000L).toInteger()
     }
     signingConfigs {
         debug {

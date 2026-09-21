@@ -130,7 +130,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          docker build -t newapi-app-mobile:"${VERSION}" -t newapi-app-mobile:latest ./mobile
+          docker build --build-arg VERSION="${VERSION}" -t newapi-app-mobile:"${VERSION}" -t newapi-app-mobile:latest ./mobile
           docker save newapi-app-mobile:"${VERSION}" | gzip > "dist/newapi-app-mobile-${VERSION}-docker.tar.gz"
           tar -czf "dist/newapi-app-mobile-${VERSION}-source.tar.gz" \
             --exclude='./mobile/node_modules' \
@@ -146,8 +146,62 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-android:
+    name: android-apk
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mobile
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # AGP 9.x needs JDK 21.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Autolinking and the JS bundle step need node_modules in place.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
+
+      - name: Build release APK
+        working-directory: mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      # The release build type is signed with the checked-in debug keystore, so the
+      # APK installs directly on a device without any secret plumbing.
+      - name: Prepare APK asset
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/newapi-app-mobile-${VERSION}-release.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: mobile/dist/*
+          if-no-files-found: error
+
   publish:
-    needs: [build-desktop, package-mobile]
+    needs: [build-desktop, package-mobile, build-android]
     runs-on: ubuntu-22.04
     steps:
       - name: Download installers

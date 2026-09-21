@@ -90,6 +90,7 @@ git push origin v1.0.20260921
 | macOS | Apple Silicon | ad-hoc 签名 DMG |
 | macOS | Intel | ad-hoc 签名 DMG |
 | Linux | x86_64 / arm64 | AppImage |
+| Android | 全架构通用包 | 可直接安装的 release APK（debug 证书签名） |
 
 另附一份 `checksums.txt`。标签可以带 `v` 前缀，也可以不带。
 
@@ -187,5 +188,6 @@ The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the w
 | macOS | Apple Silicon | ad-hoc signed DMG |
 | macOS | Intel | ad-hoc signed DMG |
 | Linux | x86_64 / arm64 | AppImage |
+| Android | all architectures | directly installable release APK (debug certificate) |
 
 A `checksums.txt` ships alongside them. Tags work with or without the `v` prefix.

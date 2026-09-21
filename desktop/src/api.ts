@@ -2,14 +2,24 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { encryptLoginPassword } from './crypto/login-crypto';
 import type {
   ApiEnvelope,
+  CheckinResult,
+  CheckinStatus,
   EncryptionKeyInfo,
+  GroupInfo,
+  LogItem,
   LogStat,
   LoginChallenge,
   LoginResult,
   NewApiStatus,
   PageResult,
+  QuotaDateItem,
   SelfUser,
+  SubscriptionPlan,
+  SubscriptionSelf,
+  TokenPayload,
   TokenItem,
+  TopUpInfo,
+  TopUpItem,
 } from './types';
 
 export type StoredSession = {
@@ -110,15 +120,16 @@ export function formatQuota(quota: number, status: NewApiStatus | null): string 
   if (type === 'TOKENS') {
     return String(quota);
   }
+  const roundedUsd = usd.toFixed(2);
   if (type === 'CNY') {
-    return `CNY ${usd * (status.usd_exchange_rate || 1)}`;
+    return `CNY ${(usd * (status.usd_exchange_rate || 1)).toFixed(2)}`;
   }
   if (type === 'CUSTOM') {
     const symbol = status.custom_currency_symbol || '';
     const rate = status.custom_currency_exchange_rate || 1;
-    return `${symbol}${usd * rate}`.trim();
+    return `${symbol}${(usd * rate).toFixed(2)}`.trim();
   }
-  return `$${usd}`;
+  return `$${roundedUsd}`;
 }
 
 export class NewApiClient {
@@ -376,6 +387,95 @@ export class NewApiClient {
     const dayAgo = now - 24 * 60 * 60;
     return this.request<LogStat>(
       `/api/log/self/stat?start_timestamp=${dayAgo}&end_timestamp=${now}`,
+    );
+  }
+
+  getNotice(): Promise<string> {
+    return this.request<string>('/api/notice');
+  }
+
+  getGroups(): Promise<Record<string, GroupInfo>> {
+    return this.request<Record<string, GroupInfo>>('/api/user/self/groups');
+  }
+
+  getUserModels(): Promise<string[]> {
+    return this.request<string[]>('/api/user/models');
+  }
+
+  getQuotaDates(startTimestamp: number, endTimestamp: number): Promise<QuotaDateItem[]> {
+    return this.request<QuotaDateItem[]>(
+      `/api/data/self?start_timestamp=${startTimestamp}&end_timestamp=${endTimestamp}`,
+    );
+  }
+
+  getUsageLogs(page = 1, pageSize = 30): Promise<PageResult<LogItem>> {
+    return this.request<PageResult<LogItem>>(
+      `/api/log/self?p=${page}&page_size=${pageSize}`,
+    );
+  }
+
+  getTopUpInfo(): Promise<TopUpInfo> {
+    return this.request<TopUpInfo>('/api/user/topup/info');
+  }
+
+  /** 兑换充值码，成功时返回入账额度（quota 单位）。 */
+  redeemTopUpKey(key: string): Promise<number> {
+    return this.request<number>('/api/user/topup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+  }
+
+  getTopUpHistory(page = 1, pageSize = 20): Promise<PageResult<TopUpItem>> {
+    return this.request<PageResult<TopUpItem>>(
+      `/api/user/topup/self?p=${page}&page_size=${pageSize}`,
+    );
+  }
+
+  getCheckinStatus(): Promise<CheckinStatus> {
+    return this.request<CheckinStatus>('/api/user/checkin');
+  }
+
+  doCheckin(): Promise<CheckinResult> {
+    return this.request<CheckinResult>('/api/user/checkin', { method: 'POST' });
+  }
+
+  getAffCode(): Promise<string> {
+    return this.request<string>('/api/user/aff');
+  }
+
+  getSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return this.request<SubscriptionPlan[]>('/api/subscription/plans');
+  }
+
+  getSubscriptionSelf(): Promise<SubscriptionSelf> {
+    return this.request<SubscriptionSelf>('/api/subscription/self');
+  }
+
+  createToken(payload: TokenPayload): Promise<void> {
+    return this.request<void>('/api/token/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  updateTokenStatus(id: number, status: number): Promise<void> {
+    return this.request<void>('/api/token/?status_only=1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status }),
+    });
+  }
+
+  deleteToken(id: number): Promise<void> {
+    return this.request<void>(`/api/token/${id}`, { method: 'DELETE' });
+  }
+
+  getTokenKey(id: number): Promise<string> {
+    return this.request<{ key: string }>(`/api/token/${id}/key`, { method: 'POST' }).then(
+      (data) => data.key,
     );
   }
 }

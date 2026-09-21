@@ -82,6 +82,16 @@ body {
   transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 
+/* 同一行的卡片保持等高，避免右侧内容不足时留下大片空白 */
+.ant-col > .stat-card,
+.ant-col > .section-card {
+  height: 100%;
+}
+
+.usage-row > .ant-col > .section-card {
+  height: auto;
+}
+
 .stat-card:hover,
 .section-card:hover {
   box-shadow: 0 6px 18px rgba(23, 43, 77, 0.08);
@@ -109,6 +119,190 @@ body {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.app-logo {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 9px;
+  display: block;
+  background: #ffffff;
+  padding: 3px;
+  object-fit: contain;
+}
+
+/* ---------- 看板扩展区块 ---------- */
+
+.token-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.compact-list {
+  margin-top: 12px;
+  border-top: 1px solid #eef0f4;
+}
+
+.compact-list-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f1f3f7;
+  font-size: 12px;
+  color: #5a6b86;
+  min-width: 0;
+}
+
+.compact-list-row span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-list-value {
+  font-weight: 600;
+  color: #1f9d55;
+  white-space: nowrap;
+}
+
+.day-usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.day-usage-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.day-usage-date {
+  font-weight: 600;
+  color: #16233c;
+  width: 76px;
+  flex: 0 0 76px;
+}
+
+.day-usage-detail {
+  font-size: 12px;
+  color: #6b7688;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-usage-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 220px;
+}
+
+.day-usage-value {
+  font-weight: 600;
+  color: #2f6fed;
+  min-width: 72px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.day-usage-bar {
+  flex: 1;
+  min-width: 80px;
+  margin: 0;
+}
+
+@media (min-width: 1200px) {
+  .day-usage-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 24px;
+    row-gap: 8px;
+  }
+
+  .day-usage-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .day-usage-date {
+    width: auto;
+    flex: none;
+  }
+
+  .day-usage-detail {
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  .day-usage-row {
+    gap: 10px;
+  }
+
+  .day-usage-right {
+    flex-basis: 170px;
+    gap: 8px;
+  }
+
+  .day-usage-value {
+    min-width: 66px;
+  }
+
+  .day-usage-bar {
+    min-width: 70px;
+  }
+}
+
+.group-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.group-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subscription-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.subscription-card .ant-card-body {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.subscription-card .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* ---------- 悬浮余额窗 ---------- */

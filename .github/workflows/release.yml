@@ -84,7 +84,7 @@ jobs:
       - name: Ad-hoc sign DMG
         if: matrix.os == 'macos'
         run: |
-          DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
+          DMG="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -name '*.dmg' -print -quit)"
           test -n "${DMG}"
           codesign --force --sign - "${DMG}"
 
@@ -93,9 +93,9 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/dmg/*.dmg
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
   package-mobile:

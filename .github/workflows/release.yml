@@ -211,7 +211,9 @@ jobs:
       - name: Generate checksums
         run: |
           cd release-assets
-          find . -type f -print0 | sort -z | xargs -0 sha256sum > ../checksums.txt
+          find . -type f -print0 | sort -z | xargs -0 -r sha256sum > ../checksums.txt
+          find . -type f -print0 | sort -z | xargs -0 -r md5sum > ../checksums-md5.txt
+          find . -type f -print0 | sort -z | xargs -0 -r sha1sum > ../checksums-sha1.txt
 
       - name: Create or update release
         env:
@@ -220,7 +222,7 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           mapfile -t ASSETS < <(find release-assets -type f | sort)
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" "${ASSETS[@]}" checksums.txt --repo "${GITHUB_REPOSITORY}" --clobber
+            gh release upload "${TAG}" "${ASSETS[@]}" checksums.txt checksums-md5.txt checksums-sha1.txt --repo "${GITHUB_REPOSITORY}" --clobber
           else
-            gh release create "${TAG}" "${ASSETS[@]}" checksums.txt --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --generate-notes
+            gh release create "${TAG}" "${ASSETS[@]}" checksums.txt checksums-md5.txt checksums-sha1.txt --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --generate-notes
           fi

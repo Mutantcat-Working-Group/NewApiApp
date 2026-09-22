@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "clipboard-manager:allow-write-text",
     {
       "identifier": "http:default",
       "allow": [{ "url": "http://*:*/*" }, { "url": "https://*:*/*" }]

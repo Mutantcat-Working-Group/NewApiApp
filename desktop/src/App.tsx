@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfigProvider, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { getCurrentWebviewWindow, WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import Dashboard from './components/Dashboard';
 import FloatingBalance from './components/FloatingBalance';
 import LoginCard from './components/LoginCard';
+import { useSleepWatchdog } from './hooks/useSleepWatchdog';
 import { NewApiClient, SessionExpiredError, loadSession, saveSession } from './api';
 import type { StoredSession } from './api';
 import type {
@@ -71,6 +72,8 @@ function MainApp() {
   const [loading, setLoading] = useState(false);
   const [loadingExtras, setLoadingExtras] = useState(false);
   const [error, setError] = useState('');
+  const refreshingRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   const loadExtras = useCallback(async (client: NewApiClient) => {
     const ignore = (err: unknown) => {
@@ -110,6 +113,11 @@ function MainApp() {
     if (!session) {
       return;
     }
+    if (refreshingRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    refreshingRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -155,7 +163,15 @@ function MainApp() {
       }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
-      setLoading(false);
+      refreshingRef.current = false;
+      const stillLoggedIn = Boolean(loadSession());
+      if (refreshQueuedRef.current && stillLoggedIn) {
+        refreshQueuedRef.current = false;
+        void loadDashboard();
+      } else {
+        refreshQueuedRef.current = false;
+        setLoading(false);
+      }
     }
   }, [session]);
 
@@ -164,6 +180,14 @@ function MainApp() {
       void loadDashboard();
     }
   }, [session, loadDashboard]);
+
+  useSleepWatchdog({
+    onResume: () => {
+      if (session) {
+        void loadDashboard();
+      }
+    },
+  });
 
   function handleLoggedIn() {
     setSession(loadSession());

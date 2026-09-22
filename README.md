@@ -1,22 +1,19 @@
 <div align=center>
-<img src="icon.png" style="width:120px;" width="120"/>
-<h1>NewApiApp</h1>
+<img src="icon.png" style="width:100px;" width="100"/>
+<h2>NewApiApp</h2>
 </div>
 
-<p align="center">读写 new-api 中转站面板的桌面 + 移动双端客户端。默认展示中文，英文版本见下方 <a href="#english">English</a>。</p>
-
 ### 一、功能简述
-- 面向 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 的双端客户端工具。
-- 支持填写中转站根地址、账号和密码，通过 new-api 面板 REST API 接入。
-- 自动适配站点是否开启登录密码加密：短密码走 RSA-OAEP(SHA-256) 直加密，超出模长容量时走 RSA 包裹 AES-256-GCM 混合加密。
-- 登录会话本地持久化，访问令牌过期后自动刷新。
-- 桌面端支持查看账号余额、用量和令牌，并提供常驻悬浮余额窗。
-- 移动端采用看板式界面，便于随时查看余额、请求统计和令牌状态。
+- 面向 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 中转站的桌面 + 移动双端客户端，通过面板 REST API 接入。
+- 支持填写中转站根地址、账号和密码登录；自动适配站点的登录密码加密方式（RSA-OAEP 直加密，超长密码使用 RSA 包裹 AES-256-GCM）。
+- 登录会话本地持久化，访问令牌过期自动刷新；会话失效自动回到登录页。
+- 桌面端：看板展示余额、用量、充值、签到、订阅和令牌，支持一键复制 API Key；提供常驻悬浮余额窗，宿主机休眠、锁屏或屏幕关闭恢复后自动重新拉取数据。
+- 移动端：看板式界面，随时查看余额、请求统计和令牌状态。
 
 ### 二、技术栈
-- 移动端：React Native + TypeScript + AsyncStorage。
-- 桌面端：Tauri 2 + React + TypeScript + antd。
-- 接口协议：new-api 面板 REST API，登录接口位于 `/api`，中转接口位于 `/v1`。
+- 移动端：React Native + TypeScript + AsyncStorage
+- 桌面端：Tauri 2 + React + TypeScript + antd
+- 接口协议：new-api 面板 REST API（面板接口在 `/api`，中转接口在 `/v1`）
 
 ### 三、工程结构
 ```text
@@ -47,15 +44,32 @@ npm run tauri dev
 
 > macOS 打包说明：DMG 打包会调用 `SetFile`，该命令经由当前 Xcode 开发者目录解析。若本机选中了 Xcode 但从未接受许可协议，打包会在最后一步失败；此时脚本会自动把 `DEVELOPER_DIR` 指向 Command Line Tools 继续完成。想彻底恢复原状可执行 `sudo xcodebuild -license accept`。
 
-### 六、接口清单
-- `GET /api/status`：获取站点状态、版本和额度展示配置
-- `GET /api/user/login/encryption-key`：获取登录密码加密公钥与密钥 ID
+### 六、接口文档
+- `GET /api/status`：站点状态、版本和额度展示配置
+- `GET /api/user/login/encryption-key`：登录密码加密公钥与密钥 ID
 - `POST /api/user/login`：账号密码登录
 - `POST /api/user/auth/refresh`：刷新访问令牌
-- `POST /api/user/auth/logout`：通知服务端吊销当前登录会话
-- `GET /api/user/self`：获取当前用户、余额和用量
+- `POST /api/user/auth/logout`：吊销当前登录会话
+- `GET /api/user/self`：当前用户、余额和用量
 - `GET /api/token/`：分页获取 API 令牌
-- `GET /api/log/self/stat`：获取今日额度、RPM、TPM 统计
+- `POST /api/token/`：创建令牌
+- `PUT /api/token/?status_only=1`：启用或停用令牌
+- `POST /api/token/{id}/key`：获取令牌完整密钥
+- `DELETE /api/token/{id}`：删除令牌
+- `GET /api/log/self/stat`：今日额度、RPM、TPM 统计
+- `GET /api/log/self`：最近用量日志
+- `GET /api/data/self`：每日用量趋势
+- `GET /api/notice`：站点公告
+- `GET /api/user/self/groups`：分组信息
+- `GET /api/user/models`：可用模型列表
+- `GET /api/user/topup/info`：充值信息
+- `POST /api/user/topup`：兑换充值码
+- `GET /api/user/topup/self`：充值记录
+- `GET /api/user/checkin`：签到状态
+- `POST /api/user/checkin`：执行签到
+- `GET /api/user/aff`：邀请码
+- `GET /api/subscription/plans`：订阅套餐
+- `GET /api/subscription/self`：当前订阅
 
 ### 七、已知限制
 - 账号若开启了登录验证（2FA、通行密钥等），需先在网页端完成一次验证流程，应用内暂不支持验证步骤。
@@ -71,18 +85,19 @@ npm run tauri dev
 - [x] 桌面端悬浮余额窗
 - [x] 登录密码加密（RSA-OAEP / AES-256-GCM 混合）
 - [x] 访问令牌自动刷新与会话过期回登录页
-- [x] 令牌列表翻页聚合
-- [x] 登出时通知服务端吊销会话
+- [x] 令牌列表翻页聚合、启停、删除与一键复制密钥
+- [x] 充值记录、签到、订阅和每日用量看板
+- [x] 宿主机休眠、锁屏或屏幕关闭恢复后自动刷新
 
 ### 九、发布流程
 推送一个与桌面端版本号一致的标签，GitHub Actions 会自动构建并发布 Release：
 
 ```sh
-git tag v1.0.20260923
-git push origin v1.0.20260923
+git tag v1.0.20260924
+git push origin v1.0.20260924
 ```
 
-标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。发布资产：
+标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。版本号使用纯日期递增（如 `1.0.20260924`），不允许追加 `-1`、`-2` 等后缀。发布资产：
 
 | 平台 | 架构 | 格式 |
 | --- | --- | --- |
@@ -96,98 +111,4 @@ git push origin v1.0.20260923
 
 ---
 
-## English
-
-<div align=center>
-<img src="icon.png" style="width:120px;" width="120"/>
-<h1>NewApiApp</h1>
-</div>
-
-### Overview
-- A desktop and mobile client for the QuantumNous new-api panel.
-- Configure the relay root URL, username and password, then connect through the new-api panel REST API.
-- Adapts to the site's password encryption setting: short passwords are sealed directly with RSA-OAEP(SHA-256), longer ones with RSA-wrapped AES-256-GCM.
-- Sessions are persisted locally and access tokens are refreshed automatically when expired.
-- The desktop client shows balance, usage and tokens, plus an always-on-top floating balance window.
-- The mobile client uses a dashboard layout for quick access to balance, request statistics and tokens.
-
-### Tech Stack
-- Mobile: React Native + TypeScript + AsyncStorage.
-- Desktop: Tauri 2 + React + TypeScript + antd.
-- API: new-api panel REST API; panel endpoints live under `/api` and relay endpoints under `/v1`.
-
-### Project Structure
-```text
-NewApiApp/
-├── desktop/   Tauri + React + antd desktop client
-└── mobile/    React Native mobile client
-```
-
-### Application IDs
-- Android / iOS package: `org.mutantcat.newapiapp`
-- Desktop Tauri Identifier: `org.mutantcat.newapi.desktop`
-- Application name: `NewApiApp`
-
-### Quick Start
-Mobile:
-```sh
-cd mobile
-npm install
-npm start
-```
-
-Desktop:
-```sh
-cd desktop
-npm install
-npm run tauri dev
-```
-
-> macOS packaging note: DMG bundling calls `SetFile`, which resolves through the active Xcode developer directory. If Xcode is selected but its license has never been accepted, bundling fails at the very last step; the build script then points `DEVELOPER_DIR` at Command Line Tools and finishes the job. Run `sudo xcodebuild -license accept` to switch back for good.
-
-### API Surface
-- `GET /api/status`: site status, version and quota display configuration
-- `GET /api/user/login/encryption-key`: login password encryption public key and key ID
-- `POST /api/user/login`: password login
-- `POST /api/user/auth/refresh`: refresh the access token
-- `POST /api/user/auth/logout`: revoke the current login session on the server
-- `GET /api/user/self`: current user, quota and usage
-- `GET /api/token/`: paged API token list
-- `GET /api/log/self/stat`: daily quota, RPM and TPM statistics
-
-### Known Limitations
-- Accounts with login verification enabled (2FA, passkeys and similar) must complete one verification pass on the website first; in-app verification is not supported yet.
-- Sites with Cloudflare Turnstile login checks cannot be used, since a third-party client cannot obtain a Turnstile token.
-- Only username/password login is supported; OAuth, GitHub, OIDC and other third-party sign-in methods are out of scope.
-
-### Roadmap
-- [x] Project scaffolding for both clients
-- [x] Unified application name and package IDs
-- [x] Mobile new-api client
-- [x] Mobile dashboard UI
-- [x] Desktop login and dashboard UI
-- [x] Desktop floating balance window
-- [x] Login password encryption (RSA-OAEP / AES-256-GCM hybrid)
-- [x] Automatic access token refresh with session-expiry fallback to login
-- [x] Paged token list aggregation
-- [x] Session revocation on logout
-
-### Release
-Push a tag that matches the desktop version and GitHub Actions builds and publishes the release:
-
-```sh
-git tag v1.0.20260923
-git push origin v1.0.20260923
-```
-
-The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch. Release assets:
-
-| Platform | Architecture | Format |
-| --- | --- | --- |
-| Windows | x86_64 | NSIS installer (`.exe`) |
-| macOS | Apple Silicon | ad-hoc signed DMG |
-| macOS | Intel | ad-hoc signed DMG |
-| Linux | x86_64 / arm64 | AppImage |
-| Android | all architectures | directly installable release APK (debug certificate) |
-
-A `checksums.txt` ships alongside them. Tags work with or without the `v` prefix.
+English version: [README_EN.md](README_EN.md)

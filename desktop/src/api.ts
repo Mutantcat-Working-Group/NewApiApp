@@ -34,6 +34,7 @@ export type StoredSession = {
 const SESSION_KEY = 'newapi.session.v1';
 const PAGE_SIZE = 100;
 const MAX_TOKEN_PAGES = 20;
+const REQUEST_TIMEOUT_MS = 20_000;
 
 /** Thrown when the refresh token is no longer accepted; the UI returns to the login screen. */
 export class SessionExpiredError extends Error {
@@ -160,24 +161,46 @@ export class NewApiClient {
       'Accept-Language': 'zh-CN',
       ...(init.headers ?? {}),
     };
-    const response = await tauriFetch(this.endpoint(path), {
-      method: init.method ?? 'GET',
-      headers,
-      body: init.body,
-    });
-    const responseHeaders = collectHeaders(response.headers);
-    let data: ApiEnvelope<unknown> = { success: response.ok };
+    // A request sent right before the host slept can come back after wake in
+    // a half-open state; abort it so the watchdog can refresh instead of
+    // waiting forever on a stale promise.
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      data = (await response.json()) as ApiEnvelope<unknown>;
-    } catch {
-      data = { success: response.ok };
+      let response: Response;
+      try {
+        response = await tauriFetch(this.endpoint(path), {
+          method: init.method ?? 'GET',
+          headers,
+          body: init.body,
+          signal: controller.signal,
+        });
+      } catch (fetchError) {
+        if (controller.signal.aborted) {
+          throw new Error('请求超时，请检查网络');
+        }
+        throw fetchError;
+      }
+
+      const responseHeaders = collectHeaders(response.headers);
+      let data: ApiEnvelope<unknown> = { success: response.ok };
+      try {
+        data = (await response.json()) as ApiEnvelope<unknown>;
+      } catch {
+        if (controller.signal.aborted) {
+          throw new Error('请求超时，请检查网络');
+        }
+        data = { success: response.ok };
+      }
+      return {
+        ok: response.ok,
+        status: response.status,
+        data,
+        headers: responseHeaders,
+      };
+    } finally {
+      window.clearTimeout(timeoutId);
     }
-    return {
-      ok: response.ok,
-      status: response.status,
-      data,
-      headers: responseHeaders,
-    };
   }
 
   private async request<T>(

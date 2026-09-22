@@ -1,7 +1,7 @@
 {
   "name": "newapi-desktop",
   "private": true,
-  "version": "1.0.20260923",
+  "version": "1.0.20260924",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@ant-design/icons": "^6.3.4",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.3",
     "@tauri-apps/plugin-http": "^2.6.1",
     "@tauri-apps/plugin-opener": "^2",
     "antd": "^6.6.5",

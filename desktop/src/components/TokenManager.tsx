@@ -52,6 +52,17 @@ function maskKey(key: string): string {
   return `${key.slice(0, 8)}...${key.slice(-4)}`;
 }
 
+async function copyText(text: string): Promise<void> {
+  try {
+    const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+    await writeText(text);
+    return;
+  } catch {
+    // Fall back to the browser clipboard when running outside Tauri.
+  }
+  await navigator.clipboard.writeText(text);
+}
+
 export default function TokenManager({
   session,
   tokens,
@@ -117,6 +128,19 @@ export default function TokenManager({
     }
   }
 
+  async function handleCopyKey(token: TokenItem) {
+    setKeyLoadingId(token.id);
+    try {
+      const fullKey = await client.getTokenKey(token.id);
+      await copyText(fullKey);
+      message.success('API Key 已复制');
+    } catch (copyError) {
+      message.error(copyError instanceof Error ? copyError.message : String(copyError));
+    } finally {
+      setKeyLoadingId(null);
+    }
+  }
+
   const columns: TableColumnsType<TokenItem> = [
     {
       title: '名称',
@@ -167,9 +191,17 @@ export default function TokenManager({
     {
       title: '操作',
       key: 'actions',
-      width: 210,
+      width: 280,
       render: (_, record) => (
         <Space size={4} wrap>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            loading={keyLoadingId === record.id}
+            onClick={() => void handleCopyKey(record)}
+          >
+            复制密钥
+          </Button>
           <Button
             size="small"
             icon={<EyeOutlined />}

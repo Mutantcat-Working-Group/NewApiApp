@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { Button, Space, Spin, Typography } from 'antd';
 import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { NewApiClient, formatQuota, loadSession } from '../api';
 import type { StoredSession } from '../api';
 import type { NewApiStatus, SelfUser } from '../types';
+import { useSleepWatchdog } from '../hooks/useSleepWatchdog';
 
 const REFRESH_INTERVAL_MS = 30000;
 
@@ -14,11 +15,18 @@ export default function FloatingBalance() {
   const [user, setUser] = useState<SelfUser | null>(session?.user ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const refreshingRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   const load = useCallback(async () => {
     if (!session) {
       return;
     }
+    if (refreshingRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    refreshingRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -29,7 +37,15 @@ export default function FloatingBalance() {
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
-      setLoading(false);
+      refreshingRef.current = false;
+      const stillLoggedIn = Boolean(loadSession());
+      if (refreshQueuedRef.current && stillLoggedIn) {
+        refreshQueuedRef.current = false;
+        void load();
+      } else {
+        refreshQueuedRef.current = false;
+        setLoading(false);
+      }
     }
   }, [session]);
 
@@ -38,6 +54,12 @@ export default function FloatingBalance() {
     const timer = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  useSleepWatchdog({
+    onResume: () => {
+      void load();
+    },
+  });
 
   async function handleClose() {
     await getCurrentWebviewWindow().close();

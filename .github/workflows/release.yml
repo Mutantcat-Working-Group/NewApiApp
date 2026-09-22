@@ -74,6 +74,10 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match app version ${VERSION}"
             exit 1
           fi
+          if [[ "$VERSION" == *-* ]]; then
+            echo "::error::version ${VERSION} must use a plain date version without -1/-2 suffixes"
+            exit 1
+          fi
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2

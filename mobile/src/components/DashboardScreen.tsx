@@ -76,6 +76,10 @@ export default function DashboardScreen({
       <Text style={styles.siteUrl} numberOfLines={1}>
         {session.baseUrl}
       </Text>
+      {/* 发行方信息：由异猫工作群（mutantcat.org）发行。 */}
+      <Text style={styles.siteUrl} numberOfLines={1}>
+        发行方：异猫工作群（mutantcat.org） · github.com/Mutantcat-Working-Group
+      </Text>
 
       {error ? (
         <View style={styles.alert}>

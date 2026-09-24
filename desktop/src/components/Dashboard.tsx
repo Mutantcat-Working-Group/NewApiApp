@@ -320,6 +320,13 @@ export default function Dashboard({
             {user?.display_name || user?.username || '-'}
           </Descriptions.Item>
           <Descriptions.Item label="用户组">{user?.group || '-'}</Descriptions.Item>
+          {/* 发行方信息：由异猫工作群（mutantcat.org）发行。 */}
+          <Descriptions.Item label="发行方">
+            异猫工作群（mutantcat.org）{' '}
+            <Typography.Link href="https://github.com/Mutantcat-Working-Group" target="_blank" rel="noreferrer">
+              github.com/Mutantcat-Working-Group
+            </Typography.Link>
+          </Descriptions.Item>
         </Descriptions>
       </Card>
 

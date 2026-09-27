@@ -27,6 +27,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["SimpChinese"],
+        "template": "installer.nsi"
+      }
+    },
     "macOS": {
       "signingIdentity": "-"
     },

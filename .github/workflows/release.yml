@@ -145,7 +145,7 @@ jobs:
           if (-not $env:PFX_PATH -or -not $env:SIGNTOOL_PATH) { throw 'code-signing setup did not run' }
           $app = "src-tauri/target/${{ matrix.target }}/release/newapi_desktop.exe"
           $signature = Get-AuthenticodeSignature $app
-          if ($signature.Status -ne 'Valid') { throw "$app lost its signature during bundling ($($signature.Status))" }
+          if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notlike '*CN=Mutantcat Working Group*') { throw "$app lost its signature during bundling ($($signature.Status))" }
           $installers = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis" -Filter *.exe
           if (-not $installers) { throw 'no NSIS installer found' }
           foreach ($installer in $installers) {

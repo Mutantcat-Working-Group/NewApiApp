@@ -24,6 +24,12 @@ jobs:
             bundle: nsis
             pattern: '*.exe'
             asset: windows-x86_64
+          - os: windows
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundle: nsis
+            pattern: '*.exe'
+            asset: windows-arm64
           - os: macos
             runner: macos-15
             target: aarch64-apple-darwin

@@ -91,6 +91,8 @@ function MainApp() {
   /** True once the dashboard holds real data, so a 429 can keep showing it. */
   const hasDataRef = useRef(false);
   const rateLimitRetryRef = useRef<number | null>(null);
+  /** Grows while the site keeps refusing, so a ban is not probed on a fixed cadence. */
+  const rateLimitBackoffRef = useRef(12_000);
   const refreshingRef = useRef(false);
   const refreshQueuedRef = useRef(false);
 
@@ -214,6 +216,7 @@ function MainApp() {
       setTokens(nextTokens);
       setLogStat(nextStat);
       hasDataRef.current = true;
+      rateLimitBackoffRef.current = 12_000;
       await loadExtras(activeClient);
       // Merge into whatever is stored now: a refresh triggered by one of the
       // requests above may have rotated the tokens, and this snapshot is stale.
@@ -256,16 +259,21 @@ function MainApp() {
     if (!loadSession() || rateLimitRetryRef.current !== null) {
       return;
     }
+    const delay = rateLimitBackoffRef.current;
     rateLimitRetryRef.current = window.setTimeout(() => {
       rateLimitRetryRef.current = null;
       if (loadSession()) {
         void loadDashboard();
       }
-    }, 12_000);
+    }, delay);
+    // Still limited? Ask again later, not again soon.
+    rateLimitBackoffRef.current = Math.min(rateLimitBackoffRef.current * 2, 60_000);
   }
 
   useEffect(() => {
     if (session) {
+      // A different account is a different quota bucket: start over politely.
+      rateLimitBackoffRef.current = 12_000;
       void loadDashboard();
     } else if (rateLimitRetryRef.current !== null) {
       window.clearTimeout(rateLimitRetryRef.current);

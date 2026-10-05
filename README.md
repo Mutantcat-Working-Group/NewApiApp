@@ -48,7 +48,7 @@
 | Linux | x86_64 / arm64 | AppImage |
 | Android | 全架构通用包 | 可直接安装的 release APK（debug 证书签名） |
 
-另附 `checksums.txt` 供校验。版本号使用纯日期递增（如 `1.0.20261010`），推送与桌面端版本一致的标签（`v` 前缀可选）后，GitHub Actions 会自动构建并发布 Release；标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。
+另附 `checksums.txt` 供校验。版本号使用纯日期递增（如 `1.0.20261011`），推送与桌面端版本一致的标签（`v` 前缀可选）后，GitHub Actions 会自动构建并发布 Release；标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。
 
 ### 四、快速上手
 

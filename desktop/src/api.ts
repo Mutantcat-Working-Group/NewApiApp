@@ -47,7 +47,9 @@ const REQUEST_TIMEOUT_MS = 20_000;
 /** new-api rate-limits bursts, so the dashboard's parallel fan-out stays polite. */
 const MAX_INBOUND_CONCURRENCY = 3;
 const REQUEST_MIN_GAP_MS = 90;
-const RATE_LIMIT_MAX_RETRIES = 2;
+// One retry is enough for a blip; burning more attempts during a ban only
+// extends it. The dashboard's own retry loop handles the slow comeback.
+const RATE_LIMIT_MAX_RETRIES = 1;
 const RATE_LIMIT_BACKOFF_MS = 800;
 const RATE_LIMIT_WAIT_CAP_MS = 10_000;
 

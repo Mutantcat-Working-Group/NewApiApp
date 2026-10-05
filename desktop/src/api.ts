@@ -51,9 +51,12 @@ const RATE_LIMIT_MAX_RETRIES = 2;
 const RATE_LIMIT_BACKOFF_MS = 800;
 const RATE_LIMIT_WAIT_CAP_MS = 10_000;
 
+/** Shown in place of new-api's raw "无权进行此操作，未登录且未提供 access token" reply. */
+const SESSION_EXPIRED_MESSAGE = '登录状态已失效，请重新登录';
+
 /** Thrown when the refresh token is no longer accepted; the UI returns to the login screen. */
 export class SessionExpiredError extends Error {
-  constructor(message = 'Session expired, please sign in again') {
+  constructor(message = SESSION_EXPIRED_MESSAGE) {
     super(message);
     this.name = 'SessionExpiredError';
   }
@@ -97,6 +100,17 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 export function accountIdOf(session: StoredSession): string {
   return `${normalizeBaseUrl(session.baseUrl)}|${session.user?.username ?? ''}`;
+}
+
+/** Two sessions are the same login when the user id, or the site plus username, matches. */
+function isSameAccount(a: StoredSession, b: StoredSession): boolean {
+  if (a.user?.id && b.user?.id) {
+    return a.user.id === b.user.id;
+  }
+  return (
+    normalizeBaseUrl(a.baseUrl) === normalizeBaseUrl(b.baseUrl) &&
+    (a.user?.username ?? '') === (b.user?.username ?? '')
+  );
 }
 
 export function hostOf(baseUrl: string): string {
@@ -159,6 +173,66 @@ function retryAfterDelayMs(headers: Record<string, string>, attempt: number): nu
     }
   }
   return Math.min(RATE_LIMIT_BACKOFF_MS * 2 ** attempt, RATE_LIMIT_WAIT_CAP_MS);
+}
+
+/** Refresh a moment before the server would reject the token, not after. */
+const TOKEN_REFRESH_SKEW_SECONDS = 60;
+
+/** A machine clock behind the server's must not turn every request into a refresh. */
+const PROACTIVE_REFRESH_COOLDOWN_MS = 60_000;
+
+/** new-api signs access tokens as JWTs, so the expiry is readable locally. */
+function jwtExpirySeconds(token: string): number | null {
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))) as {
+      exp?: number;
+    };
+    return typeof payload.exp === 'number' && payload.exp > 0 ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the access token is expired or about to be. Refreshing up front
+ * avoids the burst of 401s a cold start otherwise produces, where a failed
+ * refresh could race the in-flight requests and drop the session they rely on.
+ */
+function accessTokenNeedsRefresh(session: StoredSession): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const fromJwt = jwtExpirySeconds(session.access_token);
+  if (fromJwt !== null) {
+    return fromJwt - TOKEN_REFRESH_SKEW_SECONDS <= now;
+  }
+  const declared = session.access_expires_at;
+  if (!Number.isFinite(declared) || declared <= 0) {
+    return false;
+  }
+  // Sites report the expiry in seconds; tolerate milliseconds just in case.
+  const seconds = declared > 1e11 ? Math.floor(declared / 1000) : declared;
+  return seconds - TOKEN_REFRESH_SKEW_SECONDS <= now;
+}
+
+/**
+ * new-api reports a missing credential with HTTP 200 and a message such as
+ * "无权进行此操作，未登录且未提供 access token", so the status code alone cannot
+ * tell a dead session from an ordinary failure.
+ */
+const AUTH_FAILURE_PATTERN =
+  /未登录|未提供\s*access\s*token|access\s*token\s*(?:无效|缺失|错误|过期)|invalid\s+access\s+token|access\s+token\s+(?:expired|invalid)|unauthorized|not\s+logged\s+in|login\s+(?:has\s+)?expired/i;
+
+function isAuthFailure(response: RawResponse): boolean {
+  if (response.status === 401) {
+    return true;
+  }
+  if (response.data.success) {
+    return false;
+  }
+  return AUTH_FAILURE_PATTERN.test(response.data.message ?? '');
 }
 
 type RequestGate = {
@@ -273,7 +347,19 @@ export function loadSessionById(accountId: string): StoredSession | null {
 /** Upserts a session without changing which account is active (background refresh). */
 export function storeSession(session: StoredSession): void {
   const store = readAccountStore();
+  const id = accountIdOf(session);
   store.accounts[accountIdOf(session)] = session;
+  // The account id hashes the username, so a refresh can land the same login
+  // under a different key. Follow it, otherwise the active account keeps
+  // pointing at the stale entry and the dashboard stops finding its token.
+  const activeId = store.activeAccountId;
+  if (activeId && activeId !== id) {
+    const active = store.accounts[activeId];
+    if (active && isSameAccount(active, session)) {
+      delete store.accounts[activeId];
+      store.activeAccountId = id;
+    }
+  }
   writeAccountStore(store);
 }
 
@@ -344,7 +430,10 @@ export function formatQuota(quota: number, status: NewApiStatus | null): string 
 
 export class NewApiClient {
   /** In-flight refresh, shared by every request that hits a 401 at the same time. */
-  private refreshInFlight: Promise<boolean> | null = null;
+  private refreshInFlight: Promise<StoredSession | null> | null = null;
+
+  /** When the token was last refreshed ahead of time, to keep a skewed clock in check. */
+  private lastProactiveRefreshAt = 0;
 
   constructor(
     private readonly baseUrlInput: string,
@@ -356,7 +445,30 @@ export class NewApiClient {
   }
 
   private scopedSession(): StoredSession | null {
-    return this.accountId ? loadSessionById(this.accountId) : loadSession();
+    if (!this.accountId) {
+      return loadSession();
+    }
+    const direct = loadSessionById(this.accountId);
+    if (direct?.access_token) {
+      return direct;
+    }
+    // The stored key may no longer hash to the id this client was built with
+    // (an older build, or a refresh that rewrote the account). Fall back to the
+    // active session for the same site instead of sending no credentials.
+    const active = loadSession();
+    if (active?.access_token && normalizeBaseUrl(active.baseUrl) === this.baseUrl) {
+      return active;
+    }
+    return direct;
+  }
+
+  /** Forgets the account a dead session belonged to, never an unrelated one. */
+  private dropSession(session: StoredSession | null): void {
+    const accountId = session ? accountIdOf(session) : this.accountId;
+    if (!accountId) {
+      return;
+    }
+    removeAccount(accountId);
   }
 
   private endpoint(path: string) {
@@ -454,30 +566,45 @@ export class NewApiClient {
 
   private async request<T>(
     path: string,
-    init: Parameters<NewApiClient['rawRequest']>[1] = {},
+    init: Parameters<NewApiClient['rawRequest']>[1] & { auth?: boolean } = {},
   ): Promise<T> {
+    const sendInit = { method: init.method, headers: init.headers, body: init.body };
     const session = this.scopedSession();
-    const headers: Record<string, string> = { ...(init.headers ?? {}) };
-    if (session?.access_token) {
-      headers.Authorization = `Bearer ${session.access_token}`;
+    if (init.auth !== false && !session?.access_token) {
+      // Sending it anyway would only earn new-api's "未登录且未提供 access token"
+      // reply, which used to surface as a raw red banner on the dashboard.
+      throw new SessionExpiredError();
     }
 
-    let response = await this.fetchThrough(path, { ...init, headers });
-    if (response.status === 401 && session?.refresh_token) {
-      const refreshed = await this.tryRefresh(session);
+    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    let current = session;
+    if (
+      current?.refresh_token &&
+      Date.now() - this.lastProactiveRefreshAt > PROACTIVE_REFRESH_COOLDOWN_MS &&
+      accessTokenNeedsRefresh(current)
+    ) {
+      const refreshed = await this.tryRefresh(current);
       if (refreshed) {
-        const nextSession = this.scopedSession();
-        if (nextSession?.access_token) {
-          headers.Authorization = `Bearer ${nextSession.access_token}`;
-        }
-        response = await this.fetchThrough(path, { ...init, headers });
+        this.lastProactiveRefreshAt = Date.now();
+        current = refreshed;
       }
-      if (!refreshed || response.status === 401) {
-        if (this.accountId) {
-          removeAccount(this.accountId);
-        } else {
-          saveSession(null);
-        }
+    }
+    if (current?.access_token) {
+      headers.Authorization = `Bearer ${current.access_token}`;
+    }
+
+    let response = await this.fetchThrough(path, { ...sendInit, headers });
+    if (isAuthFailure(response)) {
+      const refreshed = current?.refresh_token ? await this.tryRefresh(current) : null;
+      if (refreshed?.access_token) {
+        // Retry with the token the refresh just produced: re-reading the store
+        // could miss it and send the request unauthenticated.
+        current = refreshed;
+        headers.Authorization = `Bearer ${refreshed.access_token}`;
+        response = await this.fetchThrough(path, { ...sendInit, headers });
+      }
+      if (!refreshed?.access_token || isAuthFailure(response)) {
+        this.dropSession(current ?? session);
         throw new SessionExpiredError();
       }
     }
@@ -488,13 +615,12 @@ export class NewApiClient {
     return response.data.data as T;
   }
 
-  private async tryRefresh(session: StoredSession): Promise<boolean> {
+  private async tryRefresh(session: StoredSession): Promise<StoredSession | null> {
     // new-api rotates the refresh cookie on every use, so parallel 401s must
     // not each redeem the same token; the losers would look like a dead session.
     if (!this.refreshInFlight) {
       this.refreshInFlight = this.refresh(session)
-        .then(() => true)
-        .catch(() => false)
+        .catch(() => null)
         .finally(() => {
           this.refreshInFlight = null;
         });
@@ -504,7 +630,8 @@ export class NewApiClient {
   }
 
   getStatus(): Promise<NewApiStatus> {
-    return this.request<NewApiStatus>('/api/status');
+    // Public endpoint: the login screen uses it before any session exists.
+    return this.request<NewApiStatus>('/api/status', { auth: false });
   }
 
   /** GET /api/user/login/encryption-key; enabled is false when the site does not encrypt passwords. */
@@ -617,7 +744,8 @@ export class NewApiClient {
     return data;
   }
 
-  async refresh(session: StoredSession): Promise<void> {
+  /** Redeems the refresh cookie and returns the session it produced. */
+  async refresh(session: StoredSession): Promise<StoredSession> {
     if (!session?.refresh_token) {
       throw new SessionExpiredError('Missing refresh token, please sign in again');
     }
@@ -640,14 +768,16 @@ export class NewApiClient {
       throw new SessionExpiredError('Refresh response is missing an access token');
     }
     const nextRefreshToken = getRefreshCookie(response.headers) ?? session.refresh_token;
-    storeSession({
+    const next: StoredSession = {
       ...session,
       access_token: data.access_token,
       access_expires_at: data.access_expires_at,
       refresh_token: nextRefreshToken,
       session_id: data.session?.sid ?? session.session_id,
       user: data.user ?? session.user,
-    });
+    };
+    storeSession(next);
+    return next;
   }
 
   /** Tells the server to revoke the session, then clears the local one. */

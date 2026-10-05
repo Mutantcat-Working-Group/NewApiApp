@@ -47,7 +47,7 @@ Download the installer for your platform from [Releases](https://github.com/Muta
 | Linux | x86_64 / arm64 | AppImage |
 | Android | all architectures | directly installable release APK (debug certificate) |
 
-A `checksums.txt` ships alongside them for verification. Versions use plain date increments (for example `1.0.20261008`); pushing a tag that matches the desktop version (the `v` prefix is optional) makes GitHub Actions build and publish the release. The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch.
+A `checksums.txt` ships alongside them for verification. Versions use plain date increments (for example `1.0.20261009`); pushing a tag that matches the desktop version (the `v` prefix is optional) makes GitHub Actions build and publish the release. The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch.
 
 ### 4. Quick Start
 

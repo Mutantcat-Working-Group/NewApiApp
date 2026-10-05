@@ -23,11 +23,12 @@ import {
   StopOutlined,
   CheckCircleOutlined,
 } from '@ant-design/icons';
-import { NewApiClient, formatQuota } from '../api';
+import { NewApiClient, accountIdOf, formatQuota } from '../api';
+import type { StoredSession } from '../api';
 import type { GroupInfo, NewApiStatus, TokenItem, TokenPayload } from '../types';
 
 type TokenManagerProps = {
-  session: { baseUrl: string };
+  session: StoredSession;
   tokens: TokenItem[];
   status: NewApiStatus | null;
   groups: Record<string, GroupInfo>;
@@ -72,7 +73,10 @@ export default function TokenManager({
   loading,
   onChanged,
 }: TokenManagerProps) {
-  const client = useMemo(() => new NewApiClient(session.baseUrl), [session.baseUrl]);
+  const client = useMemo(
+    () => new NewApiClient(session.baseUrl, accountIdOf(session)),
+    [session],
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [keyLoadingId, setKeyLoadingId] = useState<number | null>(null);

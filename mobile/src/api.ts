@@ -58,12 +58,63 @@ type RawResponse = {
   headers: Record<string, string>;
 };
 
+/** Refresh a moment before the server would reject the token, not after. */
+const TOKEN_REFRESH_SKEW_SECONDS = 60;
+
+/** A machine clock behind the server's must not turn every request into a refresh. */
+const PROACTIVE_REFRESH_COOLDOWN_MS = 60_000;
+
+/**
+ * new-api reports a missing credential with HTTP 200 and a message such as
+ * "无权进行此操作，未登录且未提供 access token", so the status code alone cannot
+ * tell a dead session from an ordinary failure.
+ */
+const AUTH_FAILURE_PATTERN =
+  /未登录|未提供\s*access\s*token|access\s*token\s*(?:无效|缺失|错误|过期)|invalid\s+access\s+token|access\s+token\s+(?:expired|invalid)|unauthorized|not\s+logged\s+in|login\s+(?:has\s+)?expired/i;
+
+function isAuthFailure(response: RawResponse): boolean {
+  if (response.status === 401) {
+    return true;
+  }
+  if (response.data.success) {
+    return false;
+  }
+  return AUTH_FAILURE_PATTERN.test(response.data.message ?? '');
+}
+
+/**
+ * True when the access token is expired or about to be. Refreshing up front
+ * avoids the burst of 401s a cold start otherwise produces, where a failed
+ * refresh could race the in-flight requests and drop the session they rely on.
+ */
+export function accessTokenNeedsRefresh(session: StoredSession): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const declared = session.access_expires_at;
+  if (!Number.isFinite(declared) || declared <= 0) {
+    return false;
+  }
+  // Sites report the expiry in seconds; tolerate milliseconds just in case.
+  const seconds = declared > 1e11 ? Math.floor(declared / 1000) : declared;
+  return seconds - TOKEN_REFRESH_SKEW_SECONDS <= now;
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
 }
 
 export function accountIdOf(session: StoredSession): string {
   return `${normalizeBaseUrl(session.baseUrl)}|${session.user?.username ?? ''}`;
+}
+
+/** Two sessions are the same login when the user id, or the site plus username, matches. */
+function isSameAccount(a: StoredSession, b: StoredSession): boolean {
+  if (a.user?.id && b.user?.id) {
+    return a.user.id === b.user.id;
+  }
+  return (
+    normalizeBaseUrl(a.baseUrl) === normalizeBaseUrl(b.baseUrl) &&
+    (a.user?.username ?? '') === (b.user?.username ?? '')
+  );
 }
 
 export function hostOf(baseUrl: string): string {
@@ -162,7 +213,18 @@ export async function loadSessionById(accountId: string): Promise<StoredSession 
 /** 更新账号数据但不改变当前活跃账号（后台刷新时使用）。 */
 export async function storeSession(session: StoredSession): Promise<void> {
   const store = await readAccountStore();
-  store.accounts[accountIdOf(session)] = session;
+  const id = accountIdOf(session);
+  store.accounts[id] = session;
+  // 账号 id 里哈希了用户名，刷新可能把同一次登录写到新 key 上；跟着迁移，
+  // 否则活跃账号一直指向旧条目，看板就再也取不到它的令牌。
+  const activeId = store.activeAccountId;
+  if (activeId && activeId !== id) {
+    const active = store.accounts[activeId];
+    if (active && isSameAccount(active, session)) {
+      delete store.accounts[activeId];
+      store.activeAccountId = id;
+    }
+  }
   await writeAccountStore(store);
 }
 
@@ -232,7 +294,10 @@ export function formatQuota(quota: number, status: NewApiStatus | null): string 
 
 export class NewApiClient {
   /** In-flight refresh, shared by every request that hits a 401 at the same time. */
-  private refreshInFlight: Promise<boolean> | null = null;
+  private refreshInFlight: Promise<StoredSession | null> | null = null;
+
+  /** When the token was last refreshed ahead of time, to keep a skewed clock in check. */
+  private lastProactiveRefreshAt = 0;
 
   constructor(
     private readonly baseUrlInput: string,
@@ -244,7 +309,29 @@ export class NewApiClient {
   }
 
   private async scopedSession(): Promise<StoredSession | null> {
-    return this.accountId ? loadSessionById(this.accountId) : loadSession();
+    if (!this.accountId) {
+      return loadSession();
+    }
+    const direct = await loadSessionById(this.accountId);
+    if (direct?.access_token) {
+      return direct;
+    }
+    // 存储的 key 可能已经不再等于创建客户端时的 id（旧版本，或刷新重写过账号）；
+    // 回退到同站点的活跃会话，而不是不带凭证发出去。
+    const active = await loadSession();
+    if (active?.access_token && normalizeBaseUrl(active.baseUrl) === this.baseUrl) {
+      return active;
+    }
+    return direct;
+  }
+
+  /** 只清除失效会话所属的账号，不牵连其它账号。 */
+  private async dropSession(session: StoredSession | null): Promise<void> {
+    const accountId = session ? accountIdOf(session) : this.accountId;
+    if (!accountId) {
+      return;
+    }
+    await removeAccount(accountId);
   }
 
   private endpoint(path: string) {
@@ -287,30 +374,44 @@ export class NewApiClient {
 
   private async request<T>(
     path: string,
-    init: Parameters<NewApiClient['rawRequest']>[1] = {},
+    init: Parameters<NewApiClient['rawRequest']>[1] & { auth?: boolean } = {},
   ): Promise<T> {
+    const sendInit = { method: init.method, headers: init.headers, body: init.body };
     const session = await this.scopedSession();
-    const headers: Record<string, string> = { ...(init.headers ?? {}) };
-    if (session?.access_token) {
-      headers.Authorization = `Bearer ${session.access_token}`;
+    if (init.auth !== false && !session?.access_token) {
+      // 照样发出去只会换来 new-api 的“未登录且未提供 access token”，
+      // 那句话会原样变成界面上刺眼的红色提示。
+      throw new SessionExpiredError();
     }
 
-    let response = await this.rawRequest(path, { ...init, headers });
-    if (response.status === 401 && session?.refresh_token) {
-      const refreshed = await this.tryRefresh(session);
+    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    let current = session;
+    if (
+      current?.refresh_token &&
+      Date.now() - this.lastProactiveRefreshAt > PROACTIVE_REFRESH_COOLDOWN_MS &&
+      accessTokenNeedsRefresh(current)
+    ) {
+      const refreshed = await this.tryRefresh(current);
       if (refreshed) {
-        const nextSession = await this.scopedSession();
-        if (nextSession?.access_token) {
-          headers.Authorization = `Bearer ${nextSession.access_token}`;
-        }
-        response = await this.rawRequest(path, { ...init, headers });
+        this.lastProactiveRefreshAt = Date.now();
+        current = refreshed;
       }
-      if (!refreshed || response.status === 401) {
-        if (this.accountId) {
-          await removeAccount(this.accountId);
-        } else {
-          await saveSession(null);
-        }
+    }
+    if (current?.access_token) {
+      headers.Authorization = `Bearer ${current.access_token}`;
+    }
+
+    let response = await this.rawRequest(path, { ...sendInit, headers });
+    if (isAuthFailure(response)) {
+      const refreshed = current?.refresh_token ? await this.tryRefresh(current) : null;
+      if (refreshed?.access_token) {
+        // 用刷新刚拿到的令牌重试：重新读存储可能取不到，请求就光着出去了。
+        current = refreshed;
+        headers.Authorization = `Bearer ${refreshed.access_token}`;
+        response = await this.rawRequest(path, { ...sendInit, headers });
+      }
+      if (!refreshed?.access_token || isAuthFailure(response)) {
+        await this.dropSession(current ?? session);
         throw new SessionExpiredError();
       }
     }
@@ -321,13 +422,12 @@ export class NewApiClient {
     return response.data.data as T;
   }
 
-  private async tryRefresh(session: StoredSession): Promise<boolean> {
+  private async tryRefresh(session: StoredSession): Promise<StoredSession | null> {
     // new-api rotates the refresh cookie on every use, so parallel 401s must
     // not each redeem the same token; the losers would look like a dead session.
     if (!this.refreshInFlight) {
       this.refreshInFlight = this.refresh(session)
-        .then(() => true)
-        .catch(() => false)
+        .catch(() => null)
         .finally(() => {
           this.refreshInFlight = null;
         });
@@ -337,7 +437,8 @@ export class NewApiClient {
   }
 
   getStatus(): Promise<NewApiStatus> {
-    return this.request<NewApiStatus>('/api/status');
+    // 公共接口：登录页在任何会话存在之前就会调用它。
+    return this.request<NewApiStatus>('/api/status', { auth: false });
   }
 
   /** GET /api/user/login/encryption-key，站点未开启加密时 enabled 为 false。 */
@@ -447,7 +548,8 @@ export class NewApiClient {
     return data;
   }
 
-  async refresh(session: StoredSession): Promise<void> {
+  /** 兑换刷新 Cookie，并返回它产生的新会话。 */
+  async refresh(session: StoredSession): Promise<StoredSession> {
     if (!session?.refresh_token) {
       throw new SessionExpiredError('缺少刷新令牌，请重新登录');
     }
@@ -470,14 +572,16 @@ export class NewApiClient {
       throw new SessionExpiredError('刷新响应缺少访问令牌');
     }
     const nextRefreshToken = getRefreshCookie(response.headers) ?? session.refresh_token;
-    await storeSession({
+    const next: StoredSession = {
       ...session,
       access_token: data.access_token,
       access_expires_at: data.access_expires_at,
       refresh_token: nextRefreshToken,
       session_id: data.session?.sid ?? session.session_id,
       user: data.user ?? session.user,
-    });
+    };
+    await storeSession(next);
+    return next;
   }
 
   /** 先通知服务端吊销会话，再清除本地会话。 */

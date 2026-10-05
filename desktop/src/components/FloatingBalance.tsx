@@ -10,8 +10,10 @@ import {
   accountIdOf,
   formatQuota,
   hostOf,
+  isSameAccount,
   listAccounts,
   loadSession,
+  sessionsEqual,
   setActiveAccount,
 } from '../api';
 import type { StoredSession } from '../api';
@@ -38,9 +40,17 @@ export default function FloatingBalance() {
       if (disposed) {
         return;
       }
-      setAccounts(listAccounts());
-      setSession(loadSession());
-      setUser(loadSession()?.user ?? null);
+      const next = loadSession();
+      const nextAccounts = listAccounts();
+      setAccounts((prev) =>
+        prev.length === nextAccounts.length &&
+        prev.every((item, i) => sessionsEqual(item, nextAccounts[i] ?? item))
+          ? prev
+          : nextAccounts,
+      );
+      // Same account with a rotated token must not restart the polling timer.
+      setSession((prev) => (prev && next && isSameAccount(prev, next) ? prev : next));
+      setUser(next?.user ?? null);
     }).then((cleanup) => {
       if (disposed) {
         cleanup();

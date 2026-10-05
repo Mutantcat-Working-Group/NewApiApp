@@ -117,6 +117,23 @@ function isSameAccount(a: StoredSession, b: StoredSession): boolean {
   );
 }
 
+/** Field-level comparison, so a no-op refresh does not rewrite the store. */
+export function sessionsEqual(a: StoredSession, b: StoredSession): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (
+    normalizeBaseUrl(a.baseUrl) !== normalizeBaseUrl(b.baseUrl) ||
+    a.access_token !== b.access_token ||
+    (a.refresh_token ?? '') !== (b.refresh_token ?? '') ||
+    (a.session_id ?? '') !== (b.session_id ?? '') ||
+    a.access_expires_at !== b.access_expires_at
+  ) {
+    return false;
+  }
+  return JSON.stringify(a.user ?? null) === JSON.stringify(b.user ?? null);
+}
+
 export function hostOf(baseUrl: string): string {
   try {
     return new URL(baseUrl).host;
@@ -214,6 +231,14 @@ export async function loadSessionById(accountId: string): Promise<StoredSession 
 export async function storeSession(session: StoredSession): Promise<void> {
   const store = await readAccountStore();
   const id = accountIdOf(session);
+  const existing = store.accounts[id];
+  const activeEntry = store.activeAccountId ? store.accounts[store.activeAccountId] : null;
+  const needsMigration = Boolean(
+    activeEntry && store.activeAccountId !== id && isSameAccount(activeEntry, session),
+  );
+  if (existing && sessionsEqual(existing, session) && !needsMigration) {
+    return;
+  }
   store.accounts[id] = session;
   // 账号 id 里哈希了用户名，刷新可能把同一次登录写到新 key 上；跟着迁移，
   // 否则活跃账号一直指向旧条目，看板就再也取不到它的令牌。

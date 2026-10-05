@@ -19,6 +19,7 @@ import {
   removeAccount,
   setActiveAccount,
   storeSession,
+  sessionsEqual,
 } from './src/api';
 import type { StoredSession } from './src/api';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from './src/types';
@@ -82,7 +83,10 @@ function AppContent() {
         // requests above may have rotated the tokens, and this snapshot is stale.
         const stored = await loadSessionById(activeAccountId);
         if (stored) {
-          await storeSession({ ...stored, user: nextUser });
+          const merged = { ...stored, user: nextUser };
+          if (!sessionsEqual(stored, merged)) {
+            await storeSession(merged);
+          }
         }
       } catch (loadError) {
         if (loadError instanceof SessionExpiredError) {

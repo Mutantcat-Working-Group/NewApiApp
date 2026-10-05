@@ -12,12 +12,14 @@ import {
   RateLimitError,
   SessionExpiredError,
   accountIdOf,
+  isSameAccount,
   listAccounts,
   loadSession,
   loadSessionById,
   removeAccount,
   setActiveAccount,
   storeSession,
+  sessionsEqual,
 } from './api';
 import type { StoredSession } from './api';
 import type {
@@ -99,8 +101,23 @@ function MainApp() {
       if (disposed) {
         return;
       }
-      setAccounts(listAccounts());
-      setSession(loadSession());
+      const nextAccounts = listAccounts();
+      setAccounts((prev) =>
+        prev.length === nextAccounts.length &&
+        prev.every((item, i) => sessionsEqual(item, nextAccounts[i] ?? item))
+          ? prev
+          : nextAccounts,
+      );
+      // The window tracks which account is active; a token rotated in the
+      // background is the same account, and re-rendering it would restart
+      // the dashboard load that produced the write.
+      setSession((prev) => {
+        const next = loadSession();
+        if (prev && next && isSameAccount(prev, next)) {
+          return prev;
+        }
+        return next;
+      });
     }).then((cleanup) => {
       if (disposed) {
         cleanup();
@@ -202,7 +219,10 @@ function MainApp() {
       // requests above may have rotated the tokens, and this snapshot is stale.
       const stored = loadSessionById(activeAccountId);
       if (stored) {
-        storeSession({ ...stored, user: nextUser });
+        const merged = { ...stored, user: nextUser };
+        if (!sessionsEqual(stored, merged)) {
+          storeSession(merged);
+        }
       }
     } catch (loadError) {
       if (loadError instanceof SessionExpiredError) {

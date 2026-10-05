@@ -103,7 +103,7 @@ export function accountIdOf(session: StoredSession): string {
 }
 
 /** Two sessions are the same login when the user id, or the site plus username, matches. */
-function isSameAccount(a: StoredSession, b: StoredSession): boolean {
+export function isSameAccount(a: StoredSession, b: StoredSession): boolean {
   if (a.user?.id && b.user?.id) {
     return a.user.id === b.user.id;
   }
@@ -111,6 +111,27 @@ function isSameAccount(a: StoredSession, b: StoredSession): boolean {
     normalizeBaseUrl(a.baseUrl) === normalizeBaseUrl(b.baseUrl) &&
     (a.user?.username ?? '') === (b.user?.username ?? '')
   );
+}
+
+/**
+ * Field-level comparison. The main window treats a stored session as "the
+ * same account" and skips its reload, so writes that change nothing must
+ * not broadcast accounts-changed either.
+ */
+export function sessionsEqual(a: StoredSession, b: StoredSession): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (
+    normalizeBaseUrl(a.baseUrl) !== normalizeBaseUrl(b.baseUrl) ||
+    a.access_token !== b.access_token ||
+    (a.refresh_token ?? '') !== (b.refresh_token ?? '') ||
+    (a.session_id ?? '') !== (b.session_id ?? '') ||
+    a.access_expires_at !== b.access_expires_at
+  ) {
+    return false;
+  }
+  return JSON.stringify(a.user ?? null) === JSON.stringify(b.user ?? null);
 }
 
 export function hostOf(baseUrl: string): string {
@@ -348,10 +369,22 @@ export function loadSessionById(accountId: string): StoredSession | null {
 export function storeSession(session: StoredSession): void {
   const store = readAccountStore();
   const id = accountIdOf(session);
-  store.accounts[accountIdOf(session)] = session;
+  const existing = store.accounts[id];
   // The account id hashes the username, so a refresh can land the same login
   // under a different key. Follow it, otherwise the active account keeps
   // pointing at the stale entry and the dashboard stops finding its token.
+  const activeEntry = store.activeAccountId ? store.accounts[store.activeAccountId] : null;
+  const needsMigration = Boolean(
+    activeEntry && store.activeAccountId !== id && isSameAccount(activeEntry, session),
+  );
+  // The dashboard's own success path writes the fresh user back. Broadcasting
+  // that write makes the window reload the very request that produced it,
+  // forever, and the site answers the loop with 429s. Nothing changed here,
+  // so skip the store, the event, and the reload it causes.
+  if (existing && sessionsEqual(existing, session) && !needsMigration) {
+    return;
+  }
+  store.accounts[id] = session;
   const activeId = store.activeAccountId;
   if (activeId && activeId !== id) {
     const active = store.accounts[activeId];

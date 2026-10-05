@@ -7,6 +7,7 @@
 
 - 面向 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 中转站的桌面 + 移动双端客户端，通过面板 REST API 接入。
 - 支持填写中转站根地址、账号和密码登录；自动适配站点的登录密码加密方式（RSA-OAEP 直加密，超长密码使用 RSA 包裹 AES-256-GCM）。
+- 兼容 new-api 新版登录验证流程，2FA 动态验证码可直接在应用内完成登录；通行密钥等其它验证方式仍需先在网页端完成。
 - 登录会话本地持久化，访问令牌过期自动刷新；会话失效自动回到登录页。
 - 桌面端：看板展示余额、用量、充值、签到、订阅和令牌，支持一键复制 API Key；提供常驻悬浮余额窗，宿主机休眠、锁屏或屏幕关闭恢复后自动重新拉取数据。
 - 移动端：看板式界面，随时查看余额、请求统计和令牌状态。
@@ -27,6 +28,7 @@
 #### 登录与会话
 
 - 填写中转站根地址、账号和密码即可登录。
+- 站点开启 2FA 登录验证时，输入动态验证码即可完成登录，无需跳转网页。
 - 自动适配站点登录密码加密方式，访问令牌过期自动刷新。
 - 会话失效自动回到登录页，无需手动清理。
 
@@ -42,7 +44,7 @@
 | Linux | x86_64 / arm64 | AppImage |
 | Android | 全架构通用包 | 可直接安装的 release APK（debug 证书签名） |
 
-另附 `checksums.txt` 供校验。版本号使用纯日期递增（如 `1.0.20260924`），推送与桌面端版本一致的标签（`v` 前缀可选）后，GitHub Actions 会自动构建并发布 Release；标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。
+另附 `checksums.txt` 供校验。版本号使用纯日期递增（如 `1.0.20261005`），推送与桌面端版本一致的标签（`v` 前缀可选）后，GitHub Actions 会自动构建并发布 Release；标签必须和 `desktop/src-tauri/tauri.conf.json` 里的 `version` 一致，流水线会先校验，不一致直接失败。
 
 ### 四、快速上手
 
@@ -58,6 +60,7 @@
 - `GET /api/status`：站点状态、版本和额度展示配置
 - `GET /api/user/login/encryption-key`：登录密码加密公钥与密钥 ID
 - `POST /api/user/login`：账号密码登录
+- `POST /api/user/login/verify`：提交登录验证码（2FA）
 - `POST /api/user/auth/refresh`：刷新访问令牌
 - `POST /api/user/auth/logout`：吊销当前登录会话
 - `GET /api/user/self`：当前用户、余额和用量
@@ -101,7 +104,7 @@ NewApiApp/
 
 ### 七、已知限制
 
-- 账号若开启了登录验证（2FA、通行密钥等），需先在网页端完成一次验证流程，应用内暂不支持验证步骤。
+- 账号若开启了通行密钥（passkey）等其它登录验证方式，需先在网页端完成一次验证流程；2FA 动态验证码可直接在应用内完成。
 - 站点若开启了 Cloudflare Turnstile 登录校验，第三方客户端无法取得校验令牌，因而无法登录。
 - 仅支持账号密码登录，OAuth / GitHub / OIDC 等第三方登录方式不在范围内。
 
@@ -134,6 +137,7 @@ npm run tauri dev
 - [x] 桌面端登录与看板 UI
 - [x] 桌面端悬浮余额窗
 - [x] 登录密码加密（RSA-OAEP / AES-256-GCM 混合）
+- [x] new-api 新版登录验证（2FA 动态验证码）应用内完成
 - [x] 访问令牌自动刷新与会话过期回登录页
 - [x] 令牌列表翻页聚合、启停、删除与一键复制密钥
 - [x] 充值记录、签到、订阅和每日用量看板

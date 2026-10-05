@@ -33,6 +33,17 @@ export class SessionExpiredError extends Error {
   }
 }
 
+/** 站点在密码步骤后要求 2FA 验证码时抛出，登录页据此切换到验证码步骤。 */
+export class LoginVerificationRequiredError extends Error {
+  readonly challenge: LoginChallenge;
+
+  constructor(message: string, challenge: LoginChallenge) {
+    super(message);
+    this.name = 'LoginVerificationRequiredError';
+    this.challenge = challenge;
+  }
+}
+
 type RawResponse = {
   ok: boolean;
   status: number;
@@ -265,11 +276,23 @@ export class NewApiClient {
       throw new Error('登录响应异常，请稍后重试');
     }
     if (data.require_verification) {
-      const available = (data.methods ?? []).filter((method) => method.available);
-      const names = available.map((method) => method.method).join('、');
-      throw new Error(
-        `该账号开启了登录验证（${names || '2FA'}），请先在网页端完成验证流程，` +
-          '当前版本暂不支持在应用内验证',
+      const twoFa = (data.methods ?? []).find(
+        (method) => method.method === '2fa' && method.available,
+      );
+      if (!twoFa) {
+        throw new Error(
+          '该账号使用的登录验证方式暂不支持，请先在网页端完成验证流程',
+        );
+      }
+      const challenge: LoginChallenge = {
+        require_verification: true,
+        flow_token: data.flow_token ?? '',
+        expires_at: data.expires_at ?? 0,
+        methods: data.methods ?? [],
+      };
+      throw new LoginVerificationRequiredError(
+        '该账号开启了 2FA 验证，请输入动态验证码完成登录',
+        challenge,
       );
     }
     if (!data.access_token) {
@@ -286,6 +309,33 @@ export class NewApiClient {
       user: data.user,
     });
     return data as LoginResult;
+  }
+
+  /** 通过 new-api 新版登录验证流程提交 2FA 验证码。 */
+  async verifyLogin(flowToken: string, code: string): Promise<LoginResult> {
+    const response = await this.rawRequest('/api/user/login/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flow_token: flowToken, code: code.trim() }),
+    });
+    if (!response.data.success) {
+      throw new Error(response.data.message || '登录验证失败');
+    }
+
+    const data = response.data.data as LoginResult | undefined;
+    if (!data?.access_token) {
+      throw new Error('登录验证响应缺少访问令牌，请稍后重试');
+    }
+    const refreshToken = getRefreshCookie(response.headers);
+    await saveSession({
+      baseUrl: this.baseUrl,
+      access_token: data.access_token,
+      access_expires_at: data.access_expires_at,
+      refresh_token: refreshToken,
+      session_id: data.session?.sid,
+      user: data.user,
+    });
+    return data;
   }
 
   async refresh(): Promise<void> {

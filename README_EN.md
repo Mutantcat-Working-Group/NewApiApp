@@ -6,6 +6,7 @@
 ### 1. Overview
 - A desktop and mobile client for the [QuantumNous/new-api](https://github.com/QuantumNous/new-api) relay panel, connected through the panel REST API.
 - Configure the relay root URL, username and password to sign in; the app adapts to the site's login password encryption (RSA-OAEP for short passwords, RSA-wrapped AES-256-GCM for longer ones).
+- The new new-api login verification flow is supported: 2FA codes can be entered in-app, while other methods (passkeys and similar) still need one verification pass on the website first.
 - Sessions are persisted locally and access tokens are refreshed automatically when expired; an expired session returns to the login screen.
 - Desktop: a dashboard for balance, usage, top-up, check-in, subscriptions and tokens, with one-click API key copying and an always-on-top floating balance window. Data is refreshed automatically after the host wakes from sleep, screen-off or lock.
 - Mobile: a dashboard-style interface for checking balance, request statistics and token status at any time.
@@ -26,6 +27,7 @@
 #### Sign-in and session
 
 - Sign in with the relay root URL, username and password.
+- When the site enables 2FA login verification, enter the code in-app to finish signing in; no browser round trip is needed.
 - Adapts to the site's password encryption automatically; access tokens refresh on expiry.
 - An expired session returns to the login screen with no manual cleanup.
 
@@ -41,7 +43,7 @@ Download the installer for your platform from [Releases](https://github.com/Muta
 | Linux | x86_64 / arm64 | AppImage |
 | Android | all architectures | directly installable release APK (debug certificate) |
 
-A `checksums.txt` ships alongside them for verification. Versions use plain date increments (for example `1.0.20260924`); pushing a tag that matches the desktop version (the `v` prefix is optional) makes GitHub Actions build and publish the release. The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch.
+A `checksums.txt` ships alongside them for verification. Versions use plain date increments (for example `1.0.20261005`); pushing a tag that matches the desktop version (the `v` prefix is optional) makes GitHub Actions build and publish the release. The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch.
 
 ### 4. Quick Start
 
@@ -57,6 +59,7 @@ The app talks to the new-api panel REST API (panel endpoints under `/api`, relay
 - `GET /api/status`: site status, version and quota display configuration
 - `GET /api/user/login/encryption-key`: login password encryption public key and key ID
 - `POST /api/user/login`: password login
+- `POST /api/user/login/verify`: submit the login verification code (2FA)
 - `POST /api/user/auth/refresh`: refresh the access token
 - `POST /api/user/auth/logout`: revoke the current login session
 - `GET /api/user/self`: current user, quota and usage
@@ -100,7 +103,7 @@ Application IDs:
 
 ### 7. Known Limitations
 
-- Accounts with login verification enabled (2FA, passkeys and similar) must complete one verification pass on the website first; in-app verification is not supported yet.
+- Accounts using other login verification methods (passkeys and similar) must complete one verification pass on the website first; 2FA codes can be entered in-app.
 - Sites with Cloudflare Turnstile login checks cannot be used, since a third-party client cannot obtain a Turnstile token.
 - Only username/password login is supported; OAuth, GitHub, OIDC and other third-party sign-in methods are out of scope.
 
@@ -133,6 +136,7 @@ npm run tauri dev
 - [x] Desktop login and dashboard UI
 - [x] Desktop floating balance window
 - [x] Login password encryption (RSA-OAEP / AES-256-GCM hybrid)
+- [x] In-app login verification for new-api 2FA flows
 - [x] Automatic access token refresh with session-expiry fallback to login
 - [x] Paged token aggregation, enable/disable, delete and one-click key copying
 - [x] Top-up history, check-in, subscription and daily usage dashboard

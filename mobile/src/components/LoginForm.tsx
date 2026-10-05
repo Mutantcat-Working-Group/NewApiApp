@@ -11,7 +11,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { NewApiClient } from '../api';
+import { LoginVerificationRequiredError, NewApiClient } from '../api';
+import type { LoginChallenge } from '../types';
 import { colors, radius, spacing } from '../theme';
 
 export type LoginFormProps = {
@@ -20,12 +21,21 @@ export type LoginFormProps = {
   notice?: string;
 };
 
+type PendingVerification = {
+  client: NewApiClient;
+  challenge: LoginChallenge;
+  baseUrl: string;
+  username: string;
+};
+
 export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
   const [baseUrl, setBaseUrl] = useState('https://');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [verification, setVerification] = useState<PendingVerification | null>(null);
+  const [verificationCode, setVerificationCode] = useState('');
 
   async function handleLogin() {
     if (loading) {
@@ -45,7 +55,41 @@ export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
     setError('');
     try {
       const client = new NewApiClient(trimmedBaseUrl);
-      await client.passwordLogin(username.trim(), password);
+      try {
+        await client.passwordLogin(username.trim(), password);
+      } catch (loginError) {
+        if (loginError instanceof LoginVerificationRequiredError) {
+          setVerification({
+            client,
+            challenge: loginError.challenge,
+            baseUrl: trimmedBaseUrl,
+            username: username.trim(),
+          });
+          setVerificationCode('');
+          setError('');
+          return;
+        }
+        throw loginError;
+      }
+      onLoggedIn();
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : String(loginError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerify() {
+    if (loading || !verification) {
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      await verification.client.verifyLogin(
+        verification.challenge.flow_token,
+        verificationCode,
+      );
       onLoggedIn();
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : String(loginError));
@@ -82,57 +126,103 @@ export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
             </View>
           ) : null}
 
-          <Text style={styles.label}>中转站根地址</Text>
-          <TextInput
-            style={styles.input}
-            value={baseUrl}
-            onChangeText={setBaseUrl}
-            placeholder="https://api.example.com"
-            placeholderTextColor={colors.textSecondary}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            returnKeyType="next"
-          />
+          {verification ? (
+            <>
+              <Text style={styles.summaryText}>
+                {verification.baseUrl} · {verification.username}
+              </Text>
+              <Text style={styles.label}>动态验证码</Text>
+              <TextInput
+                style={styles.input}
+                value={verificationCode}
+                onChangeText={setVerificationCode}
+                placeholder="请输入 2FA 动态验证码"
+                placeholderTextColor={colors.textSecondary}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="number-pad"
+                returnKeyType="go"
+                autoFocus
+                onSubmitEditing={() => void handleVerify()}
+              />
+              <Pressable
+                style={({ pressed }) => [
+                  styles.button,
+                  pressed ? styles.buttonPressed : null,
+                  loading ? styles.buttonDisabled : null,
+                ]}
+                onPress={() => void handleVerify()}
+                disabled={loading}
+              >
+                {loading ? <ActivityIndicator color="#ffffff" size="small" /> : null}
+                <Text style={styles.buttonText}>{loading ? '验证中…' : '验证并登录'}</Text>
+              </Pressable>
+              <Pressable
+                style={styles.linkButton}
+                onPress={() => {
+                  setVerification(null);
+                  setVerificationCode('');
+                }}
+                disabled={loading}
+              >
+                <Text style={styles.linkText}>返回上一步</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>中转站根地址</Text>
+              <TextInput
+                style={styles.input}
+                value={baseUrl}
+                onChangeText={setBaseUrl}
+                placeholder="https://api.example.com"
+                placeholderTextColor={colors.textSecondary}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                returnKeyType="next"
+              />
 
-          <Text style={styles.label}>账号</Text>
-          <TextInput
-            style={styles.input}
-            value={username}
-            onChangeText={setUsername}
-            placeholder="用户名"
-            placeholderTextColor={colors.textSecondary}
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="next"
-          />
+              <Text style={styles.label}>账号</Text>
+              <TextInput
+                style={styles.input}
+                value={username}
+                onChangeText={setUsername}
+                placeholder="用户名"
+                placeholderTextColor={colors.textSecondary}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="next"
+              />
 
-          <Text style={styles.label}>密码</Text>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="密码"
-            placeholderTextColor={colors.textSecondary}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="go"
-            onSubmitEditing={() => void handleLogin()}
-          />
+              <Text style={styles.label}>密码</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="密码"
+                placeholderTextColor={colors.textSecondary}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="go"
+                onSubmitEditing={() => void handleLogin()}
+              />
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.button,
-              pressed ? styles.buttonPressed : null,
-              loading ? styles.buttonDisabled : null,
-            ]}
-            onPress={() => void handleLogin()}
-            disabled={loading}
-          >
-            {loading ? <ActivityIndicator color="#ffffff" size="small" /> : null}
-            <Text style={styles.buttonText}>{loading ? '登录中…' : '登录'}</Text>
-          </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.button,
+                  pressed ? styles.buttonPressed : null,
+                  loading ? styles.buttonDisabled : null,
+                ]}
+                onPress={() => void handleLogin()}
+                disabled={loading}
+              >
+                {loading ? <ActivityIndicator color="#ffffff" size="small" /> : null}
+                <Text style={styles.buttonText}>{loading ? '登录中…' : '登录'}</Text>
+              </Pressable>
+            </>
+          )}
         </View>
 
         <Text style={styles.footer}>登录信息仅保存在本机，不会上传到第三方。</Text>
@@ -190,6 +280,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
+  summaryText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+  },
   label: {
     fontSize: 13,
     fontWeight: '500',
@@ -227,6 +322,16 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  linkButton: {
+    marginTop: spacing.sm,
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+  },
+  linkText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '500',
   },
   footer: {
     textAlign: 'center',

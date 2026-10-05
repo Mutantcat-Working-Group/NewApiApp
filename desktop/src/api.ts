@@ -44,6 +44,17 @@ export class SessionExpiredError extends Error {
   }
 }
 
+/** Thrown when the site asks for a 2FA code after the password step. */
+export class LoginVerificationRequiredError extends Error {
+  readonly challenge: LoginChallenge;
+
+  constructor(message: string, challenge: LoginChallenge) {
+    super(message);
+    this.name = 'LoginVerificationRequiredError';
+    this.challenge = challenge;
+  }
+}
+
 type RawResponse = {
   ok: boolean;
   status: number;
@@ -301,11 +312,24 @@ export class NewApiClient {
       throw new Error('Unexpected login response, please try again later');
     }
     if (data.require_verification) {
-      const available = (data.methods ?? []).filter((method) => method.available);
-      const names = available.map((method) => method.method).join(', ');
-      throw new Error(
-        `This account requires login verification (${names || '2FA'}); ` +
-          'complete it on the website first, in-app verification is not supported yet',
+      const twoFa = (data.methods ?? []).find(
+        (method) => method.method === '2fa' && method.available,
+      );
+      if (!twoFa) {
+        throw new Error(
+          'This account uses a login verification method the app does not support yet; ' +
+            'complete it on the website first',
+        );
+      }
+      const challenge: LoginChallenge = {
+        require_verification: true,
+        flow_token: data.flow_token ?? '',
+        expires_at: data.expires_at ?? 0,
+        methods: data.methods ?? [],
+      };
+      throw new LoginVerificationRequiredError(
+        'This account has 2FA enabled; enter the verification code to continue',
+        challenge,
       );
     }
     if (!data.access_token) {
@@ -322,6 +346,33 @@ export class NewApiClient {
       user: data.user,
     });
     return data as LoginResult;
+  }
+
+  /** Completes the new-api login verification flow with a 2FA code. */
+  async verifyLogin(flowToken: string, code: string): Promise<LoginResult> {
+    const response = await this.rawRequest('/api/user/login/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flow_token: flowToken, code: code.trim() }),
+    });
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Login verification failed');
+    }
+
+    const data = response.data.data as LoginResult | undefined;
+    if (!data?.access_token) {
+      throw new Error('Login verification response is missing an access token, please try again later');
+    }
+    const refreshToken = getRefreshCookie(response.headers);
+    saveSession({
+      baseUrl: this.baseUrl,
+      access_token: data.access_token,
+      access_expires_at: data.access_expires_at,
+      refresh_token: refreshToken,
+      session_id: data.session?.sid,
+      user: data.user,
+    });
+    return data;
   }
 
   async refresh(): Promise<void> {

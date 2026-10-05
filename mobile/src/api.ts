@@ -21,7 +21,14 @@ export type StoredSession = {
   user?: SelfUser;
 };
 
-const SESSION_KEY = 'newapi.session.v1';
+type AccountStore = {
+  version: 2;
+  activeAccountId: string | null;
+  accounts: Record<string, StoredSession>;
+};
+
+const LEGACY_SESSION_KEY = 'newapi.session.v1';
+const ACCOUNTS_KEY = 'newapi.accounts.v2';
 const PAGE_SIZE = 100;
 const MAX_TOKEN_PAGES = 20;
 
@@ -53,6 +60,18 @@ type RawResponse = {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
+}
+
+export function accountIdOf(session: StoredSession): string {
+  return `${normalizeBaseUrl(session.baseUrl)}|${session.user?.username ?? ''}`;
+}
+
+export function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
 }
 
 /** 与站点同源的 Origin，用于通过 new-api 的 SessionCookieOriginGuard 校验。 */
@@ -87,24 +106,103 @@ function getRefreshCookie(headers: Record<string, string>): string | undefined {
   return match ? decodeURIComponent(match[1]) : undefined;
 }
 
+function emptyAccountStore(): AccountStore {
+  return { version: 2, activeAccountId: null, accounts: {} };
+}
+
+async function readAccountStore(): Promise<AccountStore> {
+  const raw = await AsyncStorage.getItem(ACCOUNTS_KEY);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as AccountStore;
+      if (parsed?.version === 2 && parsed.accounts && typeof parsed.accounts === 'object') {
+        return parsed;
+      }
+    } catch {
+      // 新格式损坏时回退到旧版会话迁移。
+    }
+  }
+  const legacyRaw = await AsyncStorage.getItem(LEGACY_SESSION_KEY);
+  if (legacyRaw) {
+    try {
+      const legacy = JSON.parse(legacyRaw) as StoredSession;
+      if (legacy?.baseUrl && legacy.access_token) {
+        const store = emptyAccountStore();
+        const id = accountIdOf(legacy);
+        store.accounts[id] = legacy;
+        store.activeAccountId = id;
+        await AsyncStorage.setItem(ACCOUNTS_KEY, JSON.stringify(store));
+        await AsyncStorage.removeItem(LEGACY_SESSION_KEY);
+        return store;
+      }
+    } catch {
+      // 旧版数据无法解析时直接忽略。
+    }
+  }
+  return emptyAccountStore();
+}
+
+async function writeAccountStore(store: AccountStore): Promise<void> {
+  await AsyncStorage.setItem(ACCOUNTS_KEY, JSON.stringify(store));
+}
+
+export async function listAccounts(): Promise<StoredSession[]> {
+  return Object.values((await readAccountStore()).accounts);
+}
+
 export async function loadSession(): Promise<StoredSession | null> {
-  const raw = await AsyncStorage.getItem(SESSION_KEY);
-  if (!raw) {
-    return null;
-  }
-  try {
-    return JSON.parse(raw) as StoredSession;
-  } catch {
-    return null;
-  }
+  const store = await readAccountStore();
+  return store.activeAccountId ? (store.accounts[store.activeAccountId] ?? null) : null;
+}
+
+export async function loadSessionById(accountId: string): Promise<StoredSession | null> {
+  return (await readAccountStore()).accounts[accountId] ?? null;
+}
+
+/** 更新账号数据但不改变当前活跃账号（后台刷新时使用）。 */
+export async function storeSession(session: StoredSession): Promise<void> {
+  const store = await readAccountStore();
+  store.accounts[accountIdOf(session)] = session;
+  await writeAccountStore(store);
 }
 
 export async function saveSession(session: StoredSession | null): Promise<void> {
+  const store = await readAccountStore();
   if (session) {
-    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    const id = accountIdOf(session);
+    store.accounts[id] = session;
+    store.activeAccountId = id;
   } else {
-    await AsyncStorage.removeItem(SESSION_KEY);
+    if (store.activeAccountId) {
+      delete store.accounts[store.activeAccountId];
+    }
+    const remaining = Object.keys(store.accounts);
+    store.activeAccountId = remaining[0] ?? null;
   }
+  await writeAccountStore(store);
+}
+
+export async function setActiveAccount(accountId: string): Promise<StoredSession | null> {
+  const store = await readAccountStore();
+  if (!store.accounts[accountId]) {
+    return null;
+  }
+  store.activeAccountId = accountId;
+  await writeAccountStore(store);
+  return store.accounts[accountId];
+}
+
+export async function removeAccount(accountId: string): Promise<void> {
+  const store = await readAccountStore();
+  if (!store.accounts[accountId]) {
+    return;
+  }
+  delete store.accounts[accountId];
+  if (store.activeAccountId === accountId) {
+    const remaining = Object.keys(store.accounts);
+    store.activeAccountId = remaining[0] ?? null;
+  }
+  await writeAccountStore(store);
 }
 
 export function formatQuota(quota: number, status: NewApiStatus | null): string {
@@ -136,10 +234,17 @@ export class NewApiClient {
   /** In-flight refresh, shared by every request that hits a 401 at the same time. */
   private refreshInFlight: Promise<boolean> | null = null;
 
-  constructor(private readonly baseUrlInput: string) {}
+  constructor(
+    private readonly baseUrlInput: string,
+    private readonly accountId?: string,
+  ) {}
 
   private get baseUrl() {
     return normalizeBaseUrl(this.baseUrlInput);
+  }
+
+  private async scopedSession(): Promise<StoredSession | null> {
+    return this.accountId ? loadSessionById(this.accountId) : loadSession();
   }
 
   private endpoint(path: string) {
@@ -184,7 +289,7 @@ export class NewApiClient {
     path: string,
     init: Parameters<NewApiClient['rawRequest']>[1] = {},
   ): Promise<T> {
-    const session = await loadSession();
+    const session = await this.scopedSession();
     const headers: Record<string, string> = { ...(init.headers ?? {}) };
     if (session?.access_token) {
       headers.Authorization = `Bearer ${session.access_token}`;
@@ -192,16 +297,20 @@ export class NewApiClient {
 
     let response = await this.rawRequest(path, { ...init, headers });
     if (response.status === 401 && session?.refresh_token) {
-      const refreshed = await this.tryRefresh();
+      const refreshed = await this.tryRefresh(session);
       if (refreshed) {
-        const nextSession = await loadSession();
+        const nextSession = await this.scopedSession();
         if (nextSession?.access_token) {
           headers.Authorization = `Bearer ${nextSession.access_token}`;
         }
         response = await this.rawRequest(path, { ...init, headers });
       }
       if (!refreshed || response.status === 401) {
-        await saveSession(null);
+        if (this.accountId) {
+          await removeAccount(this.accountId);
+        } else {
+          await saveSession(null);
+        }
         throw new SessionExpiredError();
       }
     }
@@ -212,11 +321,11 @@ export class NewApiClient {
     return response.data.data as T;
   }
 
-  private async tryRefresh(): Promise<boolean> {
+  private async tryRefresh(session: StoredSession): Promise<boolean> {
     // new-api rotates the refresh cookie on every use, so parallel 401s must
     // not each redeem the same token; the losers would look like a dead session.
     if (!this.refreshInFlight) {
-      this.refreshInFlight = this.refresh()
+      this.refreshInFlight = this.refresh(session)
         .then(() => true)
         .catch(() => false)
         .finally(() => {
@@ -338,8 +447,7 @@ export class NewApiClient {
     return data;
   }
 
-  async refresh(): Promise<void> {
-    const session = await loadSession();
+  async refresh(session: StoredSession): Promise<void> {
     if (!session?.refresh_token) {
       throw new SessionExpiredError('缺少刷新令牌，请重新登录');
     }
@@ -362,7 +470,7 @@ export class NewApiClient {
       throw new SessionExpiredError('刷新响应缺少访问令牌');
     }
     const nextRefreshToken = getRefreshCookie(response.headers) ?? session.refresh_token;
-    await saveSession({
+    await storeSession({
       ...session,
       access_token: data.access_token,
       access_expires_at: data.access_expires_at,
@@ -374,7 +482,7 @@ export class NewApiClient {
 
   /** 先通知服务端吊销会话，再清除本地会话。 */
   async logout(): Promise<void> {
-    const session = await loadSession();
+    const session = await this.scopedSession();
     if (session?.access_token) {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -395,7 +503,11 @@ export class NewApiClient {
         // 服务端不可达时仍然清除本地会话
       }
     }
-    await saveSession(null);
+    if (this.accountId) {
+      await removeAccount(this.accountId);
+    } else {
+      await saveSession(null);
+    }
   }
 
   getSelf(): Promise<SelfUser> {

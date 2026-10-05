@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { Button, Space, Spin, Typography } from 'antd';
-import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
-import { NewApiClient, formatQuota, loadSession } from '../api';
+import { listen } from '@tauri-apps/api/event';
+import { Button, Dropdown, Space, Spin, Typography } from 'antd';
+import type { MenuProps } from 'antd';
+import { CheckOutlined, CloseOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons';
+import {
+  NewApiClient,
+  accountIdOf,
+  formatQuota,
+  hostOf,
+  listAccounts,
+  loadSession,
+  setActiveAccount,
+} from '../api';
 import type { StoredSession } from '../api';
 import type { NewApiStatus, SelfUser } from '../types';
 import { useSleepWatchdog } from '../hooks/useSleepWatchdog';
@@ -10,13 +20,37 @@ import { useSleepWatchdog } from '../hooks/useSleepWatchdog';
 const REFRESH_INTERVAL_MS = 30000;
 
 export default function FloatingBalance() {
-  const [session] = useState<StoredSession | null>(() => loadSession());
+  const [session, setSession] = useState<StoredSession | null>(() => loadSession());
+  const [accounts, setAccounts] = useState<StoredSession[]>(() => listAccounts());
   const [status, setStatus] = useState<NewApiStatus | null>(null);
   const [user, setUser] = useState<SelfUser | null>(session?.user ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const refreshingRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen('accounts-changed', () => {
+      if (disposed) {
+        return;
+      }
+      setAccounts(listAccounts());
+      setSession(loadSession());
+      setUser(loadSession()?.user ?? null);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const load = useCallback(async () => {
     if (!session) {
@@ -30,7 +64,7 @@ export default function FloatingBalance() {
     setLoading(true);
     setError('');
     try {
-      const client = new NewApiClient(session.baseUrl);
+      const client = new NewApiClient(session.baseUrl, accountIdOf(session));
       const [nextStatus, nextUser] = await Promise.all([client.getStatus(), client.getSelf()]);
       setStatus(nextStatus);
       setUser(nextUser);
@@ -65,6 +99,28 @@ export default function FloatingBalance() {
     await getCurrentWebviewWindow().close();
   }
 
+  const accountItems: MenuProps['items'] = accounts.map((account) => {
+    const id = accountIdOf(account);
+    const isActive = Boolean(session && accountIdOf(session) === id);
+    return {
+      key: id,
+      label: (
+        <div className="floating-account-item">
+          <span>{account.user?.display_name || account.user?.username || hostOf(account.baseUrl)}</span>
+          <span className="floating-account-host">{hostOf(account.baseUrl)}</span>
+        </div>
+      ),
+      icon: isActive ? <CheckOutlined /> : null,
+    };
+  });
+
+  function handleAccountSwitch(accountId: string) {
+    setActiveAccount(accountId);
+    setAccounts(listAccounts());
+    setSession(loadSession());
+    setUser(loadSession()?.user ?? null);
+  }
+
   if (!session) {
     return (
       <div className="floating-root" data-tauri-drag-region>
@@ -79,9 +135,16 @@ export default function FloatingBalance() {
   return (
     <div className="floating-root" data-tauri-drag-region>
       <div className="floating-head">
-        <Typography.Text strong className="floating-title">
-          余额
-        </Typography.Text>
+        <Dropdown
+          menu={{ items: accountItems, onClick: ({ key }) => handleAccountSwitch(key) }}
+          trigger={['click']}
+        >
+          <Button size="small" type="text" icon={<UserOutlined />} className="floating-account-button">
+            <span className="floating-title">
+              {user?.display_name || user?.username || '余额'}
+            </span>
+          </Button>
+        </Dropdown>
         <Space size={4}>
           <Button
             size="small"

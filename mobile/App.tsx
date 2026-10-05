@@ -9,7 +9,17 @@ import { StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import DashboardScreen from './src/components/DashboardScreen';
 import LoginForm from './src/components/LoginForm';
-import { NewApiClient, SessionExpiredError, loadSession, saveSession } from './src/api';
+import {
+  NewApiClient,
+  SessionExpiredError,
+  accountIdOf,
+  listAccounts,
+  loadSession,
+  loadSessionById,
+  removeAccount,
+  setActiveAccount,
+  storeSession,
+} from './src/api';
 import type { StoredSession } from './src/api';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from './src/types';
 import { colors } from './src/theme';
@@ -25,6 +35,8 @@ function App() {
 
 function AppContent() {
   const [session, setSession] = useState<StoredSession | null>(null);
+  const [accounts, setAccounts] = useState<StoredSession[]>([]);
+  const [addingAccount, setAddingAccount] = useState(false);
   const [booting, setBooting] = useState(true);
   const [status, setStatus] = useState<NewApiStatus | null>(null);
   const [user, setUser] = useState<SelfUser | null>(null);
@@ -36,11 +48,12 @@ function AppContent() {
   useEffect(() => {
     let active = true;
     void (async () => {
-      const stored = await loadSession();
+      const [stored, savedAccounts] = await Promise.all([loadSession(), listAccounts()]);
       if (!active) {
         return;
       }
       setSession(stored);
+      setAccounts(savedAccounts);
       setBooting(false);
     })();
     return () => {
@@ -53,7 +66,8 @@ function AppContent() {
       setLoading(true);
       setError('');
       try {
-        const client = new NewApiClient(activeSession.baseUrl);
+        const activeAccountId = accountIdOf(activeSession);
+        const client = new NewApiClient(activeSession.baseUrl, activeAccountId);
         const [nextStatus, nextUser, nextTokens, nextStat] = await Promise.all([
           client.getStatus(),
           client.getSelf(),
@@ -66,14 +80,18 @@ function AppContent() {
         setLogStat(nextStat);
         // Merge into whatever is stored now: a refresh triggered by one of the
         // requests above may have rotated the tokens, and this snapshot is stale.
-        const stored = await loadSession();
+        const stored = await loadSessionById(activeAccountId);
         if (stored) {
-          await saveSession({ ...stored, user: nextUser });
+          await storeSession({ ...stored, user: nextUser });
         }
       } catch (loadError) {
         if (loadError instanceof SessionExpiredError) {
-          await saveSession(null);
-          setSession(null);
+          const [nextSession, savedAccounts] = await Promise.all([
+            loadSession(),
+            listAccounts(),
+          ]);
+          setSession(nextSession);
+          setAccounts(savedAccounts);
           setStatus(null);
           setUser(null);
           setLogStat(null);
@@ -105,9 +123,11 @@ function AppContent() {
   const handleLogout = useCallback(() => {
     void (async () => {
       if (session) {
-        await new NewApiClient(session.baseUrl).logout();
+        await new NewApiClient(session.baseUrl, accountIdOf(session)).logout();
       }
-      setSession(null);
+      const [nextSession, savedAccounts] = await Promise.all([loadSession(), listAccounts()]);
+      setSession(nextSession);
+      setAccounts(savedAccounts);
       setStatus(null);
       setUser(null);
       setLogStat(null);
@@ -118,8 +138,43 @@ function AppContent() {
 
   const handleLoggedIn = useCallback(() => {
     void (async () => {
-      const stored = await loadSession();
+      const [stored, savedAccounts] = await Promise.all([loadSession(), listAccounts()]);
+      setAddingAccount(false);
       setSession(stored);
+      setAccounts(savedAccounts);
+    })();
+  }, []);
+
+  const handleSwitchAccount = useCallback((accountId: string) => {
+    void (async () => {
+      await setActiveAccount(accountId);
+      const [stored, savedAccounts] = await Promise.all([loadSession(), listAccounts()]);
+      setSession(stored);
+      setAccounts(savedAccounts);
+      setStatus(null);
+      setUser(null);
+      setLogStat(null);
+      setTokens([]);
+      setError('');
+    })();
+  }, []);
+
+  const handleRemoveAccount = useCallback((accountId: string) => {
+    void (async () => {
+      const target = (await listAccounts()).find((item) => accountIdOf(item) === accountId);
+      if (target) {
+        await new NewApiClient(target.baseUrl, accountId).logout();
+      } else {
+        await removeAccount(accountId);
+      }
+      const [stored, savedAccounts] = await Promise.all([loadSession(), listAccounts()]);
+      setSession(stored);
+      setAccounts(savedAccounts);
+      setStatus(null);
+      setUser(null);
+      setLogStat(null);
+      setTokens([]);
+      setError('');
     })();
   }, []);
 
@@ -127,8 +182,17 @@ function AppContent() {
     return <View style={styles.boot} />;
   }
 
-  if (!session) {
-    return <LoginForm onLoggedIn={handleLoggedIn} notice={error} />;
+  if (!session || addingAccount) {
+    return (
+      <LoginForm
+        onLoggedIn={handleLoggedIn}
+        onCancel={addingAccount && session ? () => setAddingAccount(false) : undefined}
+        notice={error}
+        accounts={accounts}
+        activeAccountId={session ? accountIdOf(session) : null}
+        onSwitchAccount={handleSwitchAccount}
+      />
+    );
   }
 
   return (
@@ -138,10 +202,18 @@ function AppContent() {
       user={user}
       logStat={logStat}
       tokens={tokens}
+      accounts={accounts}
+      activeAccountId={accountIdOf(session)}
       loading={loading}
       error={error}
       onRefresh={handleRefresh}
       onLogout={handleLogout}
+      onSwitchAccount={handleSwitchAccount}
+      onRemoveAccount={handleRemoveAccount}
+      onAddAccount={() => {
+        setAddingAccount(true);
+        setError('');
+      }}
     />
   );
 }

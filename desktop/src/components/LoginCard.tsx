@@ -1,13 +1,22 @@
 import { useState } from 'react';
-import { Alert, Button, Card, Form, Input, Typography } from 'antd';
+import { Alert, Avatar, Button, Card, Divider, Form, Input, Tag, Typography } from 'antd';
 import {
+  ArrowLeftOutlined,
   KeyOutlined,
   LinkOutlined,
   LoginOutlined,
+  SwapOutlined,
   SafetyCertificateOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { LoginVerificationRequiredError, NewApiClient, loadSession } from '../api';
+import {
+  LoginVerificationRequiredError,
+  NewApiClient,
+  accountIdOf,
+  hostOf,
+  loadSession,
+} from '../api';
+import type { StoredSession } from '../api';
 import type { LoginChallenge } from '../types';
 
 type LoginFormValues = {
@@ -20,6 +29,12 @@ type LoginCardProps = {
   onLoggedIn: () => void;
   /** Why the previous session ended, so the login screen can explain itself. */
   notice?: string;
+  /** Already saved accounts, shown for quick switching. */
+  accounts?: StoredSession[];
+  activeAccountId?: string | null;
+  onSwitchAccount?: (accountId: string) => void;
+  /** Shown when the login screen is opened to add another account. */
+  onCancel?: () => void;
 };
 
 type PendingVerification = {
@@ -29,7 +44,14 @@ type PendingVerification = {
   username: string;
 };
 
-export default function LoginCard({ onLoggedIn, notice }: LoginCardProps) {
+export default function LoginCard({
+  onLoggedIn,
+  notice,
+  accounts = [],
+  activeAccountId = null,
+  onSwitchAccount,
+  onCancel,
+}: LoginCardProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [verification, setVerification] = useState<PendingVerification | null>(null);
@@ -99,6 +121,16 @@ export default function LoginCard({ onLoggedIn, notice }: LoginCardProps) {
             </Typography.Title>
             <Typography.Text type="secondary">new-api 中转站桌面客户端</Typography.Text>
           </div>
+          {onCancel ? (
+            <Button
+              type="text"
+              icon={<ArrowLeftOutlined />}
+              className="login-back"
+              onClick={onCancel}
+            >
+              返回
+            </Button>
+          ) : null}
         </div>
         <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 16 }}>
           填写中转站根地址，使用面板账号密码登录，即可查看余额、用量与令牌。
@@ -106,6 +138,42 @@ export default function LoginCard({ onLoggedIn, notice }: LoginCardProps) {
         {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} /> : null}
         {notice ? (
           <Alert type="error" showIcon message={notice} style={{ marginBottom: 16 }} />
+        ) : null}
+        {accounts.length > 0 ? (
+          <div className="saved-accounts">
+            <Typography.Text type="secondary" className="saved-accounts-title">
+              已保存的账号
+            </Typography.Text>
+            {accounts.map((account) => {
+              const id = accountIdOf(account);
+              const isActive = id === activeAccountId;
+              return (
+                <div key={id} className="saved-account-row">
+                  <Avatar size={32} icon={<UserOutlined />} />
+                  <div className="saved-account-main">
+                    <Typography.Text strong ellipsis>
+                      {account.user?.display_name || account.user?.username || '未命名账号'}
+                    </Typography.Text>
+                    <Typography.Text type="secondary" ellipsis className="saved-account-sub">
+                      {hostOf(account.baseUrl)} · {account.user?.username || '未知用户'}
+                    </Typography.Text>
+                  </div>
+                  {isActive ? (
+                    <Tag color="blue">当前</Tag>
+                  ) : (
+                    <Button
+                      size="small"
+                      icon={<SwapOutlined />}
+                      onClick={() => onSwitchAccount?.(id)}
+                    >
+                      切换
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+            <Divider style={{ margin: '12px 0' }} />
+          </div>
         ) : null}
         {verification ? (
           <Form layout="vertical" onFinish={() => void handleVerify()}>

@@ -11,7 +11,13 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { LoginVerificationRequiredError, NewApiClient } from '../api';
+import {
+  LoginVerificationRequiredError,
+  NewApiClient,
+  accountIdOf,
+  hostOf,
+} from '../api';
+import type { StoredSession } from '../api';
 import type { LoginChallenge } from '../types';
 import { colors, radius, spacing } from '../theme';
 
@@ -19,6 +25,12 @@ export type LoginFormProps = {
   onLoggedIn: () => void;
   /** Why the previous session ended, so the login screen can explain itself. */
   notice?: string;
+  /** 本机已保存的账号，可一键切换回看板。 */
+  accounts?: StoredSession[];
+  activeAccountId?: string | null;
+  onSwitchAccount?: (accountId: string) => void;
+  /** 从看板进入“添加账号”时显示返回入口。 */
+  onCancel?: () => void;
 };
 
 type PendingVerification = {
@@ -28,7 +40,14 @@ type PendingVerification = {
   username: string;
 };
 
-export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
+export default function LoginForm({
+  onLoggedIn,
+  notice,
+  accounts = [],
+  activeAccountId = null,
+  onSwitchAccount,
+  onCancel,
+}: LoginFormProps) {
   const [baseUrl, setBaseUrl] = useState('https://');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -113,6 +132,48 @@ export default function LoginForm({ onLoggedIn, notice }: LoginFormProps) {
           <Text style={styles.title}>NewApiApp</Text>
           <Text style={styles.subtitle}>new-api 中转站移动客户端</Text>
         </View>
+
+        {onCancel ? (
+          <Pressable style={styles.backButton} onPress={onCancel} disabled={loading}>
+            <Text style={styles.backButtonText}>← 返回看板</Text>
+          </Pressable>
+        ) : null}
+
+        {accounts.length > 0 ? (
+          <View style={styles.savedSection}>
+            <Text style={styles.savedTitle}>已保存的账号</Text>
+            {accounts.map((account) => {
+              const id = accountIdOf(account);
+              const isActive = id === activeAccountId;
+              return (
+                <View key={id} style={styles.savedRow}>
+                  <View style={styles.savedMain}>
+                    <View style={styles.savedNameRow}>
+                      <Text style={styles.savedName} numberOfLines={1}>
+                        {account.user?.display_name || account.user?.username || '未命名账号'}
+                      </Text>
+                      {isActive ? (
+                        <Text style={styles.savedCurrent}>当前</Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.savedHost} numberOfLines={1}>
+                      {hostOf(account.baseUrl)} · {account.user?.username || '未知用户'}
+                    </Text>
+                  </View>
+                  {isActive ? null : (
+                    <Pressable
+                      style={styles.savedSwitch}
+                      onPress={() => onSwitchAccount?.(id)}
+                      disabled={loading}
+                    >
+                      <Text style={styles.savedSwitchText}>切换</Text>
+                    </Pressable>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           {error ? (
@@ -244,6 +305,72 @@ const styles = StyleSheet.create({
   brand: {
     alignItems: 'center',
     gap: spacing.xs,
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+  },
+  backButtonText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '500',
+  },
+  savedSection: {
+    gap: spacing.sm,
+  },
+  savedTitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  savedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  savedMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  savedNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  savedName: {
+    flexShrink: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  savedCurrent: {
+    fontSize: 11,
+    color: colors.primary,
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+  },
+  savedHost: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  savedSwitch: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+  },
+  savedSwitchText: {
+    fontSize: 13,
+    color: '#ffffff',
+    fontWeight: '600',
   },
   logo: {
     width: 56,

@@ -1,6 +1,16 @@
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import {
+  Alert,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { formatQuota } from '../api';
+import { accountIdOf, formatQuota, hostOf } from '../api';
 import type { StoredSession } from '../api';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from '../types';
 import StatCard from './StatCard';
@@ -12,10 +22,15 @@ export type DashboardScreenProps = {
   user: SelfUser | null;
   logStat: LogStat | null;
   tokens: TokenItem[];
+  accounts: StoredSession[];
+  activeAccountId: string | null;
   loading: boolean;
   error: string;
   onRefresh: () => void;
   onLogout: () => void;
+  onSwitchAccount: (accountId: string) => void;
+  onRemoveAccount: (accountId: string) => void;
+  onAddAccount: () => void;
 };
 
 function maskKey(key: string): string {
@@ -40,15 +55,36 @@ export default function DashboardScreen({
   user,
   logStat,
   tokens,
+  accounts,
+  activeAccountId,
   loading,
   error,
   onRefresh,
   onLogout,
+  onSwitchAccount,
+  onRemoveAccount,
+  onAddAccount,
 }: DashboardScreenProps) {
   const insets = useSafeAreaInsets();
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const remaining = formatQuota(user?.quota ?? 0, status);
   const used = formatQuota(user?.used_quota ?? 0, status);
   const consumed = formatQuota(logStat?.quota ?? 0, status);
+
+  function confirmRemove(accountId: string) {
+    Alert.alert(
+      '移除账号',
+      '将清除本机保存的登录状态。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '移除',
+          style: 'destructive',
+          onPress: () => onRemoveAccount(accountId),
+        },
+      ],
+    );
+  }
 
   return (
     <ScrollView
@@ -68,9 +104,14 @@ export default function DashboardScreen({
             {status?.system_name || 'new-api'} · {status?.version || '-'}
           </Text>
         </View>
-        <Text style={styles.logout} onPress={onLogout}>
-          退出
-        </Text>
+        <View style={styles.headerActions}>
+          <Text style={styles.switchText} onPress={() => setSwitcherOpen(true)}>
+            切换
+          </Text>
+          <Text style={styles.logout} onPress={onLogout}>
+            退出
+          </Text>
+        </View>
       </View>
 
       <Text style={styles.siteUrl} numberOfLines={1}>
@@ -156,6 +197,68 @@ export default function DashboardScreen({
           ))}
         </View>
       )}
+
+      <Modal
+        visible={switcherOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSwitcherOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSwitcherOpen(false)}>
+          <Pressable style={[styles.modalCard, { marginBottom: insets.bottom + spacing.md }]}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>切换账号</Text>
+              <Pressable onPress={() => setSwitcherOpen(false)}>
+                <Text style={styles.modalClose}>关闭</Text>
+              </Pressable>
+            </View>
+            <View style={styles.accountList}>
+              {accounts.map((account) => {
+                const id = accountIdOf(account);
+                const isActive = id === activeAccountId;
+                return (
+                  <View key={id} style={styles.accountRow}>
+                    <View style={styles.accountMain}>
+                      <View style={styles.accountNameRow}>
+                        <Text style={styles.accountName} numberOfLines={1}>
+                          {account.user?.display_name || account.user?.username || '未命名账号'}
+                        </Text>
+                        {isActive ? <Text style={styles.currentBadge}>当前</Text> : null}
+                      </View>
+                      <Text style={styles.accountHost} numberOfLines={1}>
+                        {hostOf(account.baseUrl)} · {account.user?.username || '未知用户'}
+                      </Text>
+                    </View>
+                    {isActive ? null : (
+                      <Pressable
+                        style={styles.switchButton}
+                        onPress={() => {
+                          setSwitcherOpen(false);
+                          onSwitchAccount(id);
+                        }}
+                      >
+                        <Text style={styles.switchButtonText}>切换</Text>
+                      </Pressable>
+                    )}
+                    <Pressable style={styles.removeButton} onPress={() => confirmRemove(id)}>
+                      <Text style={styles.removeButtonText}>移除</Text>
+                    </Pressable>
+                  </View>
+                );
+              })}
+            </View>
+            <Pressable
+              style={styles.addAccountButton}
+              onPress={() => {
+                setSwitcherOpen(false);
+                onAddAccount();
+              }}
+            >
+              <Text style={styles.addAccountText}>+ 添加账号</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -191,6 +294,16 @@ const styles = StyleSheet.create({
   logout: {
     fontSize: 14,
     color: colors.danger,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  switchText: {
+    fontSize: 14,
+    color: colors.primary,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
@@ -316,5 +429,107 @@ const styles = StyleSheet.create({
   tokenMeta: {
     fontSize: 12,
     color: colors.textSecondary,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: colors.background,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+    gap: spacing.md,
+  },
+  modalHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  modalClose: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  accountList: {
+    gap: spacing.sm,
+  },
+  accountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  accountMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  accountNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  accountName: {
+    flexShrink: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  currentBadge: {
+    fontSize: 11,
+    color: colors.primary,
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+  },
+  accountHost: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  switchButton: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+  },
+  switchButtonText: {
+    fontSize: 13,
+    color: '#ffffff',
+    fontWeight: '600',
+  },
+  removeButton: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+  },
+  removeButtonText: {
+    fontSize: 13,
+    color: colors.danger,
+  },
+  addAccountButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  addAccountText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.primary,
   },
 });

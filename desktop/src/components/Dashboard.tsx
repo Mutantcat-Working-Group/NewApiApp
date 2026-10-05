@@ -21,12 +21,12 @@ import {
   CheckCircleOutlined,
   GiftOutlined,
   LinkOutlined,
-  LogoutOutlined,
   PushpinOutlined,
   ReloadOutlined,
   RocketOutlined,
 } from '@ant-design/icons';
-import { NewApiClient, formatQuota } from '../api';
+import { NewApiClient, accountIdOf, formatQuota } from '../api';
+import type { StoredSession } from '../api';
 import type {
   CheckinStatus,
   GroupInfo,
@@ -41,9 +41,12 @@ import type {
   TopUpItem,
 } from '../types';
 import TokenManager from './TokenManager';
+import AccountSwitcher from './AccountSwitcher';
 
 type DashboardProps = {
-  session: { baseUrl: string };
+  session: StoredSession;
+  accounts: StoredSession[];
+  activeAccountId: string | null;
   status: NewApiStatus | null;
   user: SelfUser | null;
   logStat: { quota: number; rpm: number; tpm: number } | null;
@@ -63,7 +66,9 @@ type DashboardProps = {
   loadingExtras: boolean;
   error: string;
   onRefresh: () => void;
-  onLogout: () => void;
+  onSwitchAccount: (accountId: string) => void;
+  onRemoveAccount: (accountId: string) => void;
+  onAddAccount: () => void;
   onOpenFloatingWindow: () => void;
 };
 
@@ -147,6 +152,8 @@ function groupQuotaByDay(items: QuotaDateItem[]): DayUsage[] {
 
 export default function Dashboard({
   session,
+  accounts,
+  activeAccountId,
   status,
   user,
   logStat,
@@ -166,10 +173,15 @@ export default function Dashboard({
   loadingExtras,
   error,
   onRefresh,
-  onLogout,
+  onSwitchAccount,
+  onRemoveAccount,
+  onAddAccount,
   onOpenFloatingWindow,
 }: DashboardProps) {
-  const client = useMemo(() => new NewApiClient(session.baseUrl), [session.baseUrl]);
+  const client = useMemo(
+    () => new NewApiClient(session.baseUrl, accountIdOf(session)),
+    [session],
+  );
   const [redeemKey, setRedeemKey] = useState('');
   const [redeeming, setRedeeming] = useState(false);
   const [checkinBusy, setCheckinBusy] = useState(false);
@@ -301,9 +313,13 @@ export default function Dashboard({
             <Button type="primary" icon={<PushpinOutlined />} onClick={onOpenFloatingWindow}>
               悬浮余额窗
             </Button>
-            <Button danger icon={<LogoutOutlined />} onClick={onLogout}>
-              退出登录
-            </Button>
+            <AccountSwitcher
+              accounts={accounts}
+              activeAccountId={activeAccountId}
+              onSwitch={onSwitchAccount}
+              onRemove={onRemoveAccount}
+              onAdd={onAddAccount}
+            />
           </Space>
         </div>
         <Descriptions

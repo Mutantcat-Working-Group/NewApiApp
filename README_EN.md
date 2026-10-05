@@ -8,6 +8,7 @@
 - Configure the relay root URL, username and password to sign in; the app adapts to the site's login password encryption (RSA-OAEP for short passwords, RSA-wrapped AES-256-GCM for longer ones).
 - The new new-api login verification flow is supported: 2FA codes can be entered in-app, while other methods (passkeys and similar) still need one verification pass on the website first.
 - Sessions are persisted locally and access tokens are refreshed automatically when expired; an expired session returns to the login screen.
+- Multiple accounts can be saved locally and switched at any time: the login page, desktop dashboard and floating balance window all offer one-click account switching, while mobile switches accounts from a bottom sheet on the dashboard.
 - Desktop: a dashboard for balance, usage, top-up, check-in, subscriptions and tokens, with one-click API key copying and an always-on-top floating balance window. Data is refreshed automatically after the host wakes from sleep, screen-off or lock.
 - Mobile: a dashboard-style interface for checking balance, request statistics and token status at any time.
 
@@ -18,11 +19,13 @@
 - Balance, usage, top-up, check-in, subscriptions and tokens at a glance.
 - One-click API key copying, with paged token aggregation, enable/disable and delete.
 - An always-on-top floating balance window that refreshes automatically after sleep, lock or screen-off.
+- Switch accounts, add a new account or remove a saved account any time from the dashboard header.
 
 #### Mobile dashboard
 
 - Dashboard-style interface for checking balance, request statistics and token status at any time.
 - Check-in, top-up history and subscription details are always available.
+- A bottom sheet on the dashboard switches accounts, adds a new account or removes a saved account.
 
 #### Sign-in and session
 
@@ -30,6 +33,7 @@
 - When the site enables 2FA login verification, enter the code in-app to finish signing in; no browser round trip is needed.
 - Adapts to the site's password encryption automatically; access tokens refresh on expiry.
 - An expired session returns to the login screen with no manual cleanup.
+- Saved accounts live on this device only; the login page offers one-click switching, and signing in to a new account never overwrites existing ones.
 
 ### 3. Installation & Downloads
 
@@ -43,7 +47,7 @@ Download the installer for your platform from [Releases](https://github.com/Muta
 | Linux | x86_64 / arm64 | AppImage |
 | Android | all architectures | directly installable release APK (debug certificate) |
 
-A `checksums.txt` ships alongside them for verification. Versions use plain date increments (for example `1.0.20261005`); pushing a tag that matches the desktop version (the `v` prefix is optional) makes GitHub Actions build and publish the release. The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch.
+A `checksums.txt` ships alongside them for verification. Versions use plain date increments (for example `1.0.20261006`); pushing a tag that matches the desktop version (the `v` prefix is optional) makes GitHub Actions build and publish the release. The tag has to match the `version` in `desktop/src-tauri/tauri.conf.json`; the workflow checks that first and fails fast on a mismatch.
 
 ### 4. Quick Start
 
@@ -51,6 +55,7 @@ A `checksums.txt` ships alongside them for verification. Versions use plain date
 2. The dashboard shows balance, daily quota, RPM/TPM and token status.
 3. Copy an API key with one click; top-up, check-in and subscription actions are all in-app.
 4. The desktop edition enables the floating balance window to keep the remaining quota in view.
+5. Switch between saved accounts any time from the login page, dashboard or floating window; account data stays on this device only.
 
 ### 5. API Surface
 
@@ -141,6 +146,7 @@ npm run tauri dev
 - [x] Paged token aggregation, enable/disable, delete and one-click key copying
 - [x] Top-up history, check-in, subscription and daily usage dashboard
 - [x] Automatic refresh after host sleep, lock or screen-off recovery
+- [x] Multi-account local storage and switching (login page / dashboard / floating window)
 
 ---
 

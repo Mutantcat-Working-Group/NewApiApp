@@ -2,11 +2,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfigProvider, message } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { getCurrentWebviewWindow, WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { listen } from '@tauri-apps/api/event';
 import Dashboard from './components/Dashboard';
 import FloatingBalance from './components/FloatingBalance';
 import LoginCard from './components/LoginCard';
 import { useSleepWatchdog } from './hooks/useSleepWatchdog';
-import { NewApiClient, SessionExpiredError, loadSession, saveSession } from './api';
+import {
+  NewApiClient,
+  SessionExpiredError,
+  accountIdOf,
+  listAccounts,
+  loadSession,
+  loadSessionById,
+  removeAccount,
+  setActiveAccount,
+  storeSession,
+} from './api';
 import type { StoredSession } from './api';
 import type {
   CheckinStatus,
@@ -54,6 +65,8 @@ function App() {
 
 function MainApp() {
   const [session, setSession] = useState<StoredSession | null>(() => loadSession());
+  const [accounts, setAccounts] = useState<StoredSession[]>(() => listAccounts());
+  const [addingAccount, setAddingAccount] = useState(false);
   const [status, setStatus] = useState<NewApiStatus | null>(null);
   const [user, setUser] = useState<SelfUser | null>(null);
   const [logStat, setLogStat] = useState<LogStat | null>(null);
@@ -74,6 +87,47 @@ function MainApp() {
   const [error, setError] = useState('');
   const refreshingRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen('accounts-changed', () => {
+      if (disposed) {
+        return;
+      }
+      setAccounts(listAccounts());
+      setSession(loadSession());
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  function resetDashboardData() {
+    setStatus(null);
+    setUser(null);
+    setLogStat(null);
+    setTokens([]);
+    setNotice('');
+    setGroups({});
+    setModels([]);
+    setQuotaDates([]);
+    setUsageLogs([]);
+    setTopUpInfo(null);
+    setTopUps([]);
+    setCheckin(null);
+    setSubscriptionPlans([]);
+    setSubscriptionSelf(null);
+    setAffCode('');
+    setError('');
+  }
 
   const loadExtras = useCallback(async (client: NewApiClient) => {
     const ignore = (err: unknown) => {
@@ -121,7 +175,8 @@ function MainApp() {
     setLoading(true);
     setError('');
     try {
-      const activeClient = new NewApiClient(session.baseUrl);
+      const activeAccountId = accountIdOf(session);
+      const activeClient = new NewApiClient(session.baseUrl, activeAccountId);
       const [nextStatus, nextUser, nextTokens, nextStat] = await Promise.all([
         activeClient.getStatus(),
         activeClient.getSelf(),
@@ -135,29 +190,15 @@ function MainApp() {
       await loadExtras(activeClient);
       // Merge into whatever is stored now: a refresh triggered by one of the
       // requests above may have rotated the tokens, and this snapshot is stale.
-      const stored = loadSession();
+      const stored = loadSessionById(activeAccountId);
       if (stored) {
-        saveSession({ ...stored, user: nextUser });
+        storeSession({ ...stored, user: nextUser });
       }
     } catch (loadError) {
       if (loadError instanceof SessionExpiredError) {
-        saveSession(null);
-        setSession(null);
-        setStatus(null);
-        setUser(null);
-        setLogStat(null);
-        setTokens([]);
-        setNotice('');
-        setGroups({});
-        setModels([]);
-        setQuotaDates([]);
-        setUsageLogs([]);
-        setTopUpInfo(null);
-        setTopUps([]);
-        setCheckin(null);
-        setSubscriptionPlans([]);
-        setSubscriptionSelf(null);
-        setAffCode('');
+        resetDashboardData();
+        setSession(loadSession());
+        setAccounts(listAccounts());
         setError(loadError.message);
         return;
       }
@@ -190,30 +231,40 @@ function MainApp() {
   });
 
   function handleLoggedIn() {
+    setAddingAccount(false);
     setSession(loadSession());
+    setAccounts(listAccounts());
   }
 
-  async function handleLogout() {
-    if (session) {
-      await new NewApiClient(session.baseUrl).logout();
-    }
-    setSession(null);
-    setStatus(null);
-    setUser(null);
-    setLogStat(null);
-    setTokens([]);
-    setNotice('');
-    setGroups({});
-    setModels([]);
-    setQuotaDates([]);
-    setUsageLogs([]);
-    setTopUpInfo(null);
-    setTopUps([]);
-    setCheckin(null);
-    setSubscriptionPlans([]);
-    setSubscriptionSelf(null);
-    setAffCode('');
+  function handleCancelAddAccount() {
+    setAddingAccount(false);
     setError('');
+  }
+
+  function handleAddAccount() {
+    setAddingAccount(true);
+    setError('');
+  }
+
+  function handleSwitchAccount(accountId: string) {
+    setActiveAccount(accountId);
+    resetDashboardData();
+    setSession(loadSession());
+    setAccounts(listAccounts());
+  }
+
+  function handleRemoveAccount(accountId: string) {
+    void (async () => {
+      const target = listAccounts().find((item) => accountIdOf(item) === accountId);
+      if (target) {
+        await new NewApiClient(target.baseUrl, accountId).logout();
+      } else {
+        removeAccount(accountId);
+      }
+      resetDashboardData();
+      setSession(loadSession());
+      setAccounts(listAccounts());
+    })();
   }
 
   async function handleOpenFloatingWindow() {
@@ -227,7 +278,7 @@ function MainApp() {
       const floatingWindow = new WebviewWindow('balance', {
         url: 'index.html',
         width: 260,
-        height: 112,
+        height: 126,
         resizable: false,
         decorations: false,
         transparent: true,
@@ -243,13 +294,24 @@ function MainApp() {
     }
   }
 
-  if (!session) {
-    return <LoginCard onLoggedIn={handleLoggedIn} notice={error} />;
+  if (!session || addingAccount) {
+    return (
+      <LoginCard
+        onLoggedIn={handleLoggedIn}
+        onCancel={addingAccount && session ? handleCancelAddAccount : undefined}
+        notice={error}
+        accounts={accounts}
+        activeAccountId={session ? accountIdOf(session) : null}
+        onSwitchAccount={handleSwitchAccount}
+      />
+    );
   }
 
   return (
     <Dashboard
       session={session}
+      accounts={accounts}
+      activeAccountId={accountIdOf(session)}
       status={status}
       user={user}
       logStat={logStat}
@@ -269,7 +331,9 @@ function MainApp() {
       loadingExtras={loadingExtras}
       error={error}
       onRefresh={() => void loadDashboard()}
-      onLogout={handleLogout}
+      onSwitchAccount={handleSwitchAccount}
+      onRemoveAccount={handleRemoveAccount}
+      onAddAccount={handleAddAccount}
       onOpenFloatingWindow={() => void handleOpenFloatingWindow()}
     />
   );

@@ -1,4 +1,5 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { emit } from '@tauri-apps/api/event';
 import { encryptLoginPassword } from './crypto/login-crypto';
 import type {
   ApiEnvelope,
@@ -31,7 +32,14 @@ export type StoredSession = {
   user?: SelfUser;
 };
 
-const SESSION_KEY = 'newapi.session.v1';
+type AccountStore = {
+  version: 2;
+  activeAccountId: string | null;
+  accounts: Record<string, StoredSession>;
+};
+
+const LEGACY_SESSION_KEY = 'newapi.session.v1';
+const ACCOUNTS_KEY = 'newapi.accounts.v2';
 const PAGE_SIZE = 100;
 const MAX_TOKEN_PAGES = 20;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -66,6 +74,18 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
 }
 
+export function accountIdOf(session: StoredSession): string {
+  return `${normalizeBaseUrl(session.baseUrl)}|${session.user?.username ?? ''}`;
+}
+
+export function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
+}
+
 /** Same-origin Origin, required by new-api's SessionCookieOriginGuard. */
 function originOf(baseUrl: string): string {
   try {
@@ -98,24 +118,114 @@ function getRefreshCookie(headers: Record<string, string>): string | undefined {
   return match ? decodeURIComponent(match[1]) : undefined;
 }
 
-export function loadSession(): StoredSession | null {
-  const raw = localStorage.getItem(SESSION_KEY);
-  if (!raw) {
-    return null;
-  }
+function notifyAccountsChanged(): void {
   try {
-    return JSON.parse(raw) as StoredSession;
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      void emit('accounts-changed', null);
+    }
   } catch {
-    return null;
+    // Non-Tauri contexts have no other windows to notify.
   }
 }
 
-export function saveSession(session: StoredSession | null): void {
-  if (session) {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  } else {
-    localStorage.removeItem(SESSION_KEY);
+function emptyAccountStore(): AccountStore {
+  return { version: 2, activeAccountId: null, accounts: {} };
+}
+
+function readAccountStore(): AccountStore {
+  const raw = localStorage.getItem(ACCOUNTS_KEY);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as AccountStore;
+      if (parsed?.version === 2 && parsed.accounts && typeof parsed.accounts === 'object') {
+        return parsed;
+      }
+    } catch {
+      // Fall through to the legacy session below.
+    }
   }
+  const legacyRaw = localStorage.getItem(LEGACY_SESSION_KEY);
+  if (legacyRaw) {
+    try {
+      const legacy = JSON.parse(legacyRaw) as StoredSession;
+      if (legacy?.baseUrl && legacy.access_token) {
+        const store = emptyAccountStore();
+        const id = accountIdOf(legacy);
+        store.accounts[id] = legacy;
+        store.activeAccountId = id;
+        localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(store));
+        localStorage.removeItem(LEGACY_SESSION_KEY);
+        return store;
+      }
+    } catch {
+      // Ignore malformed legacy data.
+    }
+  }
+  return emptyAccountStore();
+}
+
+function writeAccountStore(store: AccountStore): void {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(store));
+  notifyAccountsChanged();
+}
+
+export function listAccounts(): StoredSession[] {
+  return Object.values(readAccountStore().accounts);
+}
+
+export function loadSession(): StoredSession | null {
+  const store = readAccountStore();
+  return store.activeAccountId ? (store.accounts[store.activeAccountId] ?? null) : null;
+}
+
+export function loadSessionById(accountId: string): StoredSession | null {
+  return readAccountStore().accounts[accountId] ?? null;
+}
+
+/** Upserts a session without changing which account is active (background refresh). */
+export function storeSession(session: StoredSession): void {
+  const store = readAccountStore();
+  store.accounts[accountIdOf(session)] = session;
+  writeAccountStore(store);
+}
+
+export function saveSession(session: StoredSession | null): void {
+  const store = readAccountStore();
+  if (session) {
+    const id = accountIdOf(session);
+    store.accounts[id] = session;
+    store.activeAccountId = id;
+  } else {
+    if (store.activeAccountId) {
+      delete store.accounts[store.activeAccountId];
+    }
+    const remaining = Object.keys(store.accounts);
+    store.activeAccountId = remaining[0] ?? null;
+  }
+  writeAccountStore(store);
+}
+
+export function setActiveAccount(accountId: string): StoredSession | null {
+  const store = readAccountStore();
+  if (!store.accounts[accountId]) {
+    return null;
+  }
+  store.activeAccountId = accountId;
+  writeAccountStore(store);
+  return store.accounts[accountId];
+}
+
+export function removeAccount(accountId: string): void {
+  const store = readAccountStore();
+  if (!store.accounts[accountId]) {
+    return;
+  }
+  delete store.accounts[accountId];
+  if (store.activeAccountId === accountId) {
+    const remaining = Object.keys(store.accounts);
+    store.activeAccountId = remaining[0] ?? null;
+  }
+  writeAccountStore(store);
 }
 
 export function formatQuota(quota: number, status: NewApiStatus | null): string {
@@ -148,10 +258,17 @@ export class NewApiClient {
   /** In-flight refresh, shared by every request that hits a 401 at the same time. */
   private refreshInFlight: Promise<boolean> | null = null;
 
-  constructor(private readonly baseUrlInput: string) {}
+  constructor(
+    private readonly baseUrlInput: string,
+    private readonly accountId?: string,
+  ) {}
 
   private get baseUrl() {
     return normalizeBaseUrl(this.baseUrlInput);
+  }
+
+  private scopedSession(): StoredSession | null {
+    return this.accountId ? loadSessionById(this.accountId) : loadSession();
   }
 
   private endpoint(path: string) {
@@ -218,7 +335,7 @@ export class NewApiClient {
     path: string,
     init: Parameters<NewApiClient['rawRequest']>[1] = {},
   ): Promise<T> {
-    const session = loadSession();
+    const session = this.scopedSession();
     const headers: Record<string, string> = { ...(init.headers ?? {}) };
     if (session?.access_token) {
       headers.Authorization = `Bearer ${session.access_token}`;
@@ -226,16 +343,20 @@ export class NewApiClient {
 
     let response = await this.rawRequest(path, { ...init, headers });
     if (response.status === 401 && session?.refresh_token) {
-      const refreshed = await this.tryRefresh();
+      const refreshed = await this.tryRefresh(session);
       if (refreshed) {
-        const nextSession = loadSession();
+        const nextSession = this.scopedSession();
         if (nextSession?.access_token) {
           headers.Authorization = `Bearer ${nextSession.access_token}`;
         }
         response = await this.rawRequest(path, { ...init, headers });
       }
       if (!refreshed || response.status === 401) {
-        saveSession(null);
+        if (this.accountId) {
+          removeAccount(this.accountId);
+        } else {
+          saveSession(null);
+        }
         throw new SessionExpiredError();
       }
     }
@@ -246,11 +367,11 @@ export class NewApiClient {
     return response.data.data as T;
   }
 
-  private async tryRefresh(): Promise<boolean> {
+  private async tryRefresh(session: StoredSession): Promise<boolean> {
     // new-api rotates the refresh cookie on every use, so parallel 401s must
     // not each redeem the same token; the losers would look like a dead session.
     if (!this.refreshInFlight) {
-      this.refreshInFlight = this.refresh()
+      this.refreshInFlight = this.refresh(session)
         .then(() => true)
         .catch(() => false)
         .finally(() => {
@@ -375,8 +496,7 @@ export class NewApiClient {
     return data;
   }
 
-  async refresh(): Promise<void> {
-    const session = loadSession();
+  async refresh(session: StoredSession): Promise<void> {
     if (!session?.refresh_token) {
       throw new SessionExpiredError('Missing refresh token, please sign in again');
     }
@@ -399,7 +519,7 @@ export class NewApiClient {
       throw new SessionExpiredError('Refresh response is missing an access token');
     }
     const nextRefreshToken = getRefreshCookie(response.headers) ?? session.refresh_token;
-    saveSession({
+    storeSession({
       ...session,
       access_token: data.access_token,
       access_expires_at: data.access_expires_at,
@@ -411,7 +531,7 @@ export class NewApiClient {
 
   /** Tells the server to revoke the session, then clears the local one. */
   async logout(): Promise<void> {
-    const session = loadSession();
+    const session = this.scopedSession();
     if (session?.access_token) {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -432,7 +552,11 @@ export class NewApiClient {
         // Clear the local session even when the server is unreachable
       }
     }
-    saveSession(null);
+    if (this.accountId) {
+      removeAccount(this.accountId);
+    } else {
+      saveSession(null);
+    }
   }
 
   getSelf(): Promise<SelfUser> {

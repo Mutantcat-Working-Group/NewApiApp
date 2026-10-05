@@ -150,6 +150,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if (-not $env:PFX_PATH -or -not $env:SIGNTOOL_PATH) { throw 'code-signing setup did not run' }
           $app = "src-tauri/target/${{ matrix.target }}/release/newapi_desktop.exe"
+          # tauri build recompiles the binary after the pre-bundle signing pass,
+          # so sign the actual bundled exe again before packaging it into NSIS.
+          & $env:SIGNTOOL_PATH sign /fd SHA256 /f $env:PFX_PATH /p $env:SIGN_PASSWORD /d "NewApiApp" "$app"
           $signature = Get-AuthenticodeSignature $app
           if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notlike '*CN=Mutantcat Working Group*') { throw "$app lost its signature during bundling ($($signature.Status))" }
           $installers = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis" -Filter *.exe

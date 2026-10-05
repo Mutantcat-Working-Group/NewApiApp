@@ -42,6 +42,7 @@ import type {
 } from '../types';
 import TokenManager from './TokenManager';
 import AccountSwitcher from './AccountSwitcher';
+import FittedText from './FittedText';
 
 type DashboardProps = {
   session: StoredSession;
@@ -109,6 +110,10 @@ function formatDuration(milliseconds: number): string {
   return `${(milliseconds / 1000).toFixed(2)} s`;
 }
 
+function formatCount(value: number): string {
+  return value.toLocaleString('zh-CN');
+}
+
 type DayUsage = {
   day: number;
   quota: number;
@@ -148,6 +153,16 @@ function groupQuotaByDay(items: QuotaDateItem[]): DayUsage[] {
     .map((entry) => ({ ...entry, models: [...entry.models] }))
     .sort((a, b) => b.day - a.day)
     .slice(0, 14);
+}
+
+type FittedStatisticProps = {
+  title: string;
+  text: string;
+};
+
+/** A statistic whose value shrinks to fit instead of overflowing its card. */
+function FittedStatistic({ title, text }: FittedStatisticProps) {
+  return <Statistic title={title} value={0} valueRender={() => <FittedText text={text} />} />;
 }
 
 export default function Dashboard({
@@ -357,41 +372,44 @@ export default function Dashboard({
         />
       ) : null}
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} sm={12} lg={6}>
           <Card className="stat-card" bordered={false} hoverable>
-            <Statistic title="剩余额度" value={formatQuota(user?.quota ?? 0, status)} />
+            <FittedStatistic title="剩余额度" text={formatQuota(user?.quota ?? 0, status)} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card className="stat-card" bordered={false} hoverable>
-            <Statistic title="已用额度" value={formatQuota(user?.used_quota ?? 0, status)} />
+            <FittedStatistic title="已用额度" text={formatQuota(user?.used_quota ?? 0, status)} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card className="stat-card" bordered={false} hoverable>
-            <Statistic title="请求次数" value={user?.request_count ?? 0} />
+            <FittedStatistic title="请求次数" text={formatCount(user?.request_count ?? 0)} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card className="stat-card" bordered={false} hoverable>
-            <Statistic title="令牌数量" value={tokens.length} />
+            <FittedStatistic title="令牌数量" text={formatCount(tokens.length)} />
           </Card>
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} lg={8}>
           <Card title="近 24 小时" className="section-card" bordered={false} hoverable>
-            <Row gutter={[16, 16]}>
+            <Row gutter={[16, 16]} align="stretch">
               <Col xs={24} sm={8} lg={24}>
-                <Statistic title="消耗额度" value={formatQuota(logStat?.quota ?? 0, status)} />
+                <FittedStatistic
+                  title="消耗额度"
+                  text={formatQuota(logStat?.quota ?? 0, status)}
+                />
               </Col>
               <Col xs={24} sm={8} lg={24}>
-                <Statistic title="RPM" value={logStat?.rpm ?? 0} />
+                <FittedStatistic title="RPM" text={formatCount(logStat?.rpm ?? 0)} />
               </Col>
               <Col xs={24} sm={8} lg={24}>
-                <Statistic title="TPM" value={logStat?.tpm ?? 0} />
+                <FittedStatistic title="TPM" text={formatCount(logStat?.tpm ?? 0)} />
               </Col>
             </Row>
           </Card>
@@ -417,18 +435,24 @@ export default function Dashboard({
             {!checkin ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="站点未启用签到" />
             ) : (
-              <Row gutter={[16, 16]}>
+              <Row gutter={[16, 16]} align="stretch">
                 <Col span={8}>
-                  <Statistic title="累计签到" value={checkin.stats?.total_checkins ?? 0} />
-                </Col>
-                <Col span={8}>
-                  <Statistic
-                    title="累计奖励"
-                    value={formatQuota(checkin.stats?.total_quota ?? 0, status)}
+                  <FittedStatistic
+                    title="累计签到"
+                    text={formatCount(checkin.stats?.total_checkins ?? 0)}
                   />
                 </Col>
                 <Col span={8}>
-                  <Statistic title="本月签到" value={checkin.stats?.checkin_count ?? 0} />
+                  <FittedStatistic
+                    title="累计奖励"
+                    text={formatQuota(checkin.stats?.total_quota ?? 0, status)}
+                  />
+                </Col>
+                <Col span={8}>
+                  <FittedStatistic
+                    title="本月签到"
+                    text={formatCount(checkin.stats?.checkin_count ?? 0)}
+                  />
                 </Col>
               </Row>
             )}
@@ -454,7 +478,7 @@ export default function Dashboard({
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]} className="usage-row">
+      <Row gutter={[16, 16]} className="usage-row" align="stretch">
         <Col xs={24} lg={10}>
           <Card title="兑换码充值" className="section-card" bordered={false} hoverable>
             <Space.Compact style={{ width: '100%' }}>
@@ -612,7 +636,7 @@ export default function Dashboard({
 
       {subscriptionPlans.length > 0 || activeSubscriptions.length > 0 ? (
         <Card title="订阅套餐" className="section-card" bordered={false} hoverable>
-          <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} align="stretch">
             {activeSubscriptions.map((subscription) => (
               <Col xs={24} md={12} lg={8} key={subscription.id}>
                 <Card size="small" className="subscription-card" bordered>

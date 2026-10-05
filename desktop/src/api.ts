@@ -44,6 +44,13 @@ const PAGE_SIZE = 100;
 const MAX_TOKEN_PAGES = 20;
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/** new-api rate-limits bursts, so the dashboard's parallel fan-out stays polite. */
+const MAX_INBOUND_CONCURRENCY = 3;
+const REQUEST_MIN_GAP_MS = 90;
+const RATE_LIMIT_MAX_RETRIES = 2;
+const RATE_LIMIT_BACKOFF_MS = 800;
+const RATE_LIMIT_WAIT_CAP_MS = 10_000;
+
 /** Thrown when the refresh token is no longer accepted; the UI returns to the login screen. */
 export class SessionExpiredError extends Error {
   constructor(message = 'Session expired, please sign in again') {
@@ -60,6 +67,20 @@ export class LoginVerificationRequiredError extends Error {
     super(message);
     this.name = 'LoginVerificationRequiredError';
     this.challenge = challenge;
+  }
+}
+
+/** Thrown when the site keeps answering 429 after the client retried with backoff. */
+export class RateLimitError extends Error {
+  readonly retryAfterMs: number | null;
+
+  constructor(
+    message = '站点接口限流（429），请求过于频繁，请稍后重试',
+    retryAfterMs: number | null = null,
+  ) {
+    super(message);
+    this.name = 'RateLimitError';
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -116,6 +137,73 @@ function getRefreshCookie(headers: Record<string, string>): string | undefined {
   const header = headers['set-cookie'] ?? '';
   const match = /new_api_refresh=([^;]+)/i.exec(header);
   return match ? decodeURIComponent(match[1]) : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+/** How long to wait before resending after a 429, honouring Retry-After when present. */
+function retryAfterDelayMs(headers: Record<string, string>, attempt: number): number {
+  const raw = (headers['retry-after'] ?? '').trim();
+  if (raw) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(Math.max(seconds * 1000, 250), RATE_LIMIT_WAIT_CAP_MS);
+    }
+    const at = Date.parse(raw);
+    if (Number.isFinite(at)) {
+      return Math.min(Math.max(at - Date.now(), 250), RATE_LIMIT_WAIT_CAP_MS);
+    }
+  }
+  return Math.min(RATE_LIMIT_BACKOFF_MS * 2 ** attempt, RATE_LIMIT_WAIT_CAP_MS);
+}
+
+type RequestGate = {
+  active: number;
+  nextStartAt: number;
+  waiters: Array<() => void>;
+  timer: number | null;
+};
+
+const requestGate: RequestGate = { active: 0, nextStartAt: 0, waiters: [], timer: null };
+
+function pumpRequestGate(): void {
+  if (requestGate.timer !== null) {
+    window.clearTimeout(requestGate.timer);
+    requestGate.timer = null;
+  }
+  while (
+    requestGate.active < MAX_INBOUND_CONCURRENCY &&
+    requestGate.waiters.length > 0 &&
+    Date.now() >= requestGate.nextStartAt
+  ) {
+    const wake = requestGate.waiters.shift();
+    requestGate.nextStartAt = Date.now() + REQUEST_MIN_GAP_MS;
+    requestGate.active += 1;
+    wake?.();
+  }
+  if (requestGate.active < MAX_INBOUND_CONCURRENCY && requestGate.waiters.length > 0) {
+    const delay = Math.max(20, requestGate.nextStartAt - Date.now());
+    requestGate.timer = window.setTimeout(() => {
+      requestGate.timer = null;
+      pumpRequestGate();
+    }, delay);
+  }
+}
+
+function acquireRequestSlot(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    requestGate.waiters.push(resolve);
+    pumpRequestGate();
+  });
+}
+
+function releaseRequestSlot(): void {
+  requestGate.active = Math.max(0, requestGate.active - 1);
+  pumpRequestGate();
 }
 
 function notifyAccountsChanged(): void {
@@ -283,6 +371,22 @@ export class NewApiClient {
       body?: string;
     } = {},
   ): Promise<RawResponse> {
+    await acquireRequestSlot();
+    try {
+      return await this.sendRequest(path, init);
+    } finally {
+      releaseRequestSlot();
+    }
+  }
+
+  private async sendRequest(
+    path: string,
+    init: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+    } = {},
+  ): Promise<RawResponse> {
     const headers: Record<string, string> = {
       Accept: 'application/json',
       // Ask new-api to answer in Chinese (fallback chain: user setting -> context -> header -> default)
@@ -331,6 +435,23 @@ export class NewApiClient {
     }
   }
 
+  /** Sends a request through the gate, retrying 429s with backoff. */
+  private async fetchThrough(
+    path: string,
+    init: Parameters<NewApiClient['sendRequest']>[1],
+  ): Promise<RawResponse> {
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.rawRequest(path, init);
+      if (response.status !== 429) {
+        return response;
+      }
+      if (attempt >= RATE_LIMIT_MAX_RETRIES) {
+        throw new RateLimitError();
+      }
+      await sleep(retryAfterDelayMs(response.headers, attempt));
+    }
+  }
+
   private async request<T>(
     path: string,
     init: Parameters<NewApiClient['rawRequest']>[1] = {},
@@ -341,7 +462,7 @@ export class NewApiClient {
       headers.Authorization = `Bearer ${session.access_token}`;
     }
 
-    let response = await this.rawRequest(path, { ...init, headers });
+    let response = await this.fetchThrough(path, { ...init, headers });
     if (response.status === 401 && session?.refresh_token) {
       const refreshed = await this.tryRefresh(session);
       if (refreshed) {
@@ -349,7 +470,7 @@ export class NewApiClient {
         if (nextSession?.access_token) {
           headers.Authorization = `Bearer ${nextSession.access_token}`;
         }
-        response = await this.rawRequest(path, { ...init, headers });
+        response = await this.fetchThrough(path, { ...init, headers });
       }
       if (!refreshed || response.status === 401) {
         if (this.accountId) {

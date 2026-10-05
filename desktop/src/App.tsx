@@ -9,6 +9,7 @@ import LoginCard from './components/LoginCard';
 import { useSleepWatchdog } from './hooks/useSleepWatchdog';
 import {
   NewApiClient,
+  RateLimitError,
   SessionExpiredError,
   accountIdOf,
   listAccounts,
@@ -85,6 +86,9 @@ function MainApp() {
   const [loading, setLoading] = useState(false);
   const [loadingExtras, setLoadingExtras] = useState(false);
   const [error, setError] = useState('');
+  /** True once the dashboard holds real data, so a 429 can keep showing it. */
+  const hasDataRef = useRef(false);
+  const rateLimitRetryRef = useRef<number | null>(null);
   const refreshingRef = useRef(false);
   const refreshQueuedRef = useRef(false);
 
@@ -111,6 +115,7 @@ function MainApp() {
   }, []);
 
   function resetDashboardData() {
+    hasDataRef.current = false;
     setStatus(null);
     setUser(null);
     setLogStat(null);
@@ -174,6 +179,10 @@ function MainApp() {
     refreshingRef.current = true;
     setLoading(true);
     setError('');
+    if (rateLimitRetryRef.current !== null) {
+      window.clearTimeout(rateLimitRetryRef.current);
+      rateLimitRetryRef.current = null;
+    }
     try {
       const activeAccountId = accountIdOf(session);
       const activeClient = new NewApiClient(session.baseUrl, activeAccountId);
@@ -187,6 +196,7 @@ function MainApp() {
       setUser(nextUser);
       setTokens(nextTokens);
       setLogStat(nextStat);
+      hasDataRef.current = true;
       await loadExtras(activeClient);
       // Merge into whatever is stored now: a refresh triggered by one of the
       // requests above may have rotated the tokens, and this snapshot is stale.
@@ -200,6 +210,12 @@ function MainApp() {
         setSession(loadSession());
         setAccounts(listAccounts());
         setError(loadError.message);
+        return;
+      }
+      if (loadError instanceof RateLimitError && hasDataRef.current) {
+        // 429 只说明这一轮刷新被限流，看板里已有的数据仍然准确：保留它并稍后重试
+        message.warning('站点接口限流（429），已保留上一次数据，稍后自动重试');
+        scheduleRateLimitRetry();
         return;
       }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -216,10 +232,31 @@ function MainApp() {
     }
   }, [session]);
 
+  function scheduleRateLimitRetry() {
+    if (!loadSession() || rateLimitRetryRef.current !== null) {
+      return;
+    }
+    rateLimitRetryRef.current = window.setTimeout(() => {
+      rateLimitRetryRef.current = null;
+      if (loadSession()) {
+        void loadDashboard();
+      }
+    }, 12_000);
+  }
+
   useEffect(() => {
     if (session) {
       void loadDashboard();
+    } else if (rateLimitRetryRef.current !== null) {
+      window.clearTimeout(rateLimitRetryRef.current);
+      rateLimitRetryRef.current = null;
     }
+    return () => {
+      if (rateLimitRetryRef.current !== null) {
+        window.clearTimeout(rateLimitRetryRef.current);
+        rateLimitRetryRef.current = null;
+      }
+    };
   }, [session, loadDashboard]);
 
   useSleepWatchdog({

@@ -186,10 +186,6 @@ body {
   height: 100%;
 }
 
-.usage-row > .ant-col > .section-card {
-  height: auto;
-}
-
 .stat-card:hover,
 .section-card:hover {
   box-shadow: 0 6px 18px rgba(23, 43, 77, 0.08);
@@ -403,6 +399,20 @@ body {
   gap: 8px;
 }
 
+/* 订阅小卡同样撑满所在列，和兑换码、14 天用量等板块对齐 */
+.ant-col > .subscription-card {
+  height: 100%;
+}
+
+/* ---------- 自适应数值 ---------- */
+
+.fitted-text {
+  display: inline-block;
+  min-width: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- 悬浮余额窗 ---------- */
 
 .floating-root {
@@ -457,6 +467,8 @@ body {
   justify-content: center;
   gap: 2px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .floating-value {
@@ -479,4 +491,9 @@ body {
 .floating-error {
   font-size: 12px;
   word-break: break-all;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }

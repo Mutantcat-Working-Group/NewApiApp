@@ -6,6 +6,7 @@ import type { MenuProps } from 'antd';
 import { CheckOutlined, CloseOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons';
 import {
   NewApiClient,
+  RateLimitError,
   accountIdOf,
   formatQuota,
   hostOf,
@@ -16,6 +17,7 @@ import {
 import type { StoredSession } from '../api';
 import type { NewApiStatus, SelfUser } from '../types';
 import { useSleepWatchdog } from '../hooks/useSleepWatchdog';
+import FittedText from './FittedText';
 
 const REFRESH_INTERVAL_MS = 30000;
 
@@ -69,6 +71,11 @@ export default function FloatingBalance() {
       setStatus(nextStatus);
       setUser(nextUser);
     } catch (loadError) {
+      if (loadError instanceof RateLimitError) {
+        // 浮动窗很小，限流时只留一行提示，数字继续显示上一次的结果
+        setError('限流（429），稍后重试');
+        return;
+      }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
       refreshingRef.current = false;
@@ -95,9 +102,29 @@ export default function FloatingBalance() {
     },
   });
 
-  async function handleClose() {
-    await getCurrentWebviewWindow().close();
-  }
+  const handleClose = useCallback(async () => {
+    const current = getCurrentWebviewWindow();
+    try {
+      await current.close();
+    } catch {
+      // 某些平台上 close 可能被拒绝，退一步隐藏窗口，保证按钮一定有反应
+      try {
+        await current.hide();
+      } catch {
+        // 隐藏也失败时不再抛出，窗口仍可通过任务栏恢复
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        void handleClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleClose]);
 
   const accountItems: MenuProps['items'] = accounts.map((account) => {
     const id = accountIdOf(account);
@@ -165,16 +192,19 @@ export default function FloatingBalance() {
         <Typography.Text type="danger" className="floating-error">
           {error}
         </Typography.Text>
-      ) : (
-        <div className="floating-metrics">
-          <div className="floating-value">
-            {loading && !user ? <Spin size="small" /> : formatQuota(user?.quota ?? 0, status)}
-          </div>
-          <Typography.Text type="secondary" className="floating-sub">
-            已用 {formatQuota(user?.used_quota ?? 0, status)}
-          </Typography.Text>
+      ) : null}
+      <div className="floating-metrics">
+        <div className="floating-value">
+          {loading && !user ? (
+            <Spin size="small" />
+          ) : (
+            <FittedText text={formatQuota(user?.quota ?? 0, status)} />
+          )}
         </div>
-      )}
+        <Typography.Text type="secondary" className="floating-sub">
+          已用 {formatQuota(user?.used_quota ?? 0, status)}
+        </Typography.Text>
+      </div>
     </div>
   );
 }

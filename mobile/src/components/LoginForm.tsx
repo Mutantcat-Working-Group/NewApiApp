@@ -140,7 +140,12 @@ export default function LoginForm({
         keyboardDismissMode="on-drag"
       >
         <View style={styles.brand}>
-          <Image source={require('../assets/icon.png')} style={styles.logo} resizeMode="contain" />
+          <Image
+            source={require('../assets/login-logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+            accessibilityLabel="NewApiApp"
+          />
           <Text style={styles.title}>NewApiApp</Text>
           <Text style={styles.subtitle}>new-api 中转站移动客户端</Text>
         </View>
@@ -385,10 +390,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   logo: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.md,
-    backgroundColor: '#ffffff',
+    width: 64,
+    height: 64,
     marginBottom: spacing.sm,
   },
   title: {

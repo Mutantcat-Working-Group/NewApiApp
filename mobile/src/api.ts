@@ -192,6 +192,14 @@ export function hostOf(baseUrl: string): string {
   }
 }
 
+/**
+ * fetch 抛出的原生错误只有 “Network request failed”，用户看不出是明文被拦、
+ * 域名解析失败还是证书不受信。按协议补一句提示，至少能点出 http 这个最常见的坑。
+ */
+function cleartextHint(baseUrl: string): string {
+  return /^http:\/\//i.test(baseUrl.trim()) ? '（当前是 http:// 明文地址，需确认服务器支持）' : '';
+}
+
 /** 与站点同源的 Origin，用于通过 new-api 的 SessionCookieOriginGuard 校验。 */
 function originOf(baseUrl: string): string {
   try {
@@ -435,11 +443,18 @@ export class NewApiClient {
         'Accept-Language': 'zh-CN',
         ...(init.headers ?? {}),
       };
-      const response = await fetch(this.endpoint(path), {
-        method: init.method ?? 'GET',
-        headers,
-        body: init.body,
-      });
+      let response: Response;
+      try {
+        response = await fetch(this.endpoint(path), {
+          method: init.method ?? 'GET',
+          headers,
+          body: init.body,
+        });
+      } catch {
+        // 明文 HTTP 被系统策略拦掉、DNS 解析失败、证书不受信都会落到这里，
+        // 原生 fetch 只会抛出 “Network request failed”，对用户毫无指向性。
+        throw new Error(`无法连接 ${hostOf(this.baseUrl)}，请检查地址是否可达${cleartextHint(this.baseUrl)}`);
+      }
       const responseHeaders = collectHeaders(response.headers);
       let data: ApiEnvelope<unknown> = { success: response.ok };
       try {

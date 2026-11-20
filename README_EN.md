@@ -11,6 +11,7 @@
 - Multiple accounts can be saved locally and switched at any time: the login page, desktop dashboard and floating balance window all offer one-click account switching, while mobile switches accounts from a bottom sheet on the dashboard.
 - Desktop: a dashboard for balance, usage, top-up, check-in, subscriptions and tokens, with one-click API key copying and an always-on-top floating balance window. Data is refreshed automatically after the host wakes from sleep, screen-off or lock.
 - Mobile: a dashboard-style interface for checking balance, request statistics and token status at any time.
+- Both clients pace themselves against new-api's built-in request frequency limits (360 requests / 180 s globally, 20 / 20 min for login and token routes, counted per IP): requests queue locally instead of being rejected, and if the site still answers 429 the previous data stays on screen while an explicit banner says the data is cached and when the next retry happens.
 
 ### 2. Features
 
@@ -147,6 +148,7 @@ npm run tauri dev
 - [x] Top-up history, check-in, subscription and daily usage dashboard
 - [x] Automatic refresh after host sleep, lock or screen-off recovery
 - [x] Multi-account local storage and switching (login page / dashboard / floating window)
+- [x] Adapted to new-api's built-in request frequency limits: requests queue within the local budget, and a 429 falls back to cached data with an explicit degraded-state banner
 
 ---
 

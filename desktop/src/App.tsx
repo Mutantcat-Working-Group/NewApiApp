@@ -22,6 +22,9 @@ import {
   sessionsEqual,
 } from './api';
 import type { StoredSession } from './api';
+import { cacheKey, readCache, writeCache, clearCachePrefix } from './cache';
+import { subscribeRateLimit } from './rate-limit';
+import type { RateLimitStatus } from './rate-limit';
 import type {
   CheckinStatus,
   GroupInfo,
@@ -36,6 +39,31 @@ import type {
   TopUpInfo,
   TopUpItem,
 } from './types';
+
+/** 一次成功刷新后落盘的看板快照，限流或排队时用它继续显示。 */
+type DashboardSnapshot = {
+  status: NewApiStatus | null;
+  user: SelfUser | null;
+  logStat: LogStat | null;
+  tokens: TokenItem[];
+  notice: string;
+  groups: Record<string, GroupInfo>;
+  models: string[];
+  quotaDates: QuotaDateItem[];
+  usageLogs: LogItem[];
+  topUpInfo: TopUpInfo | null;
+  topUps: TopUpItem[];
+  checkin: CheckinStatus | null;
+  subscriptionPlans: SubscriptionPlan[];
+  subscriptionSelf: SubscriptionSelf | null;
+  affCode: string;
+};
+
+const SNAPSHOT_NAME = 'dashboard';
+
+function readSnapshot(accountId: string): { savedAt: number; data: DashboardSnapshot } | null {
+  return readCache<DashboardSnapshot>(cacheKey(accountId, SNAPSHOT_NAME));
+}
 
 function currentWindowLabel(): string | null {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
@@ -95,6 +123,34 @@ function MainApp() {
   const rateLimitBackoffRef = useRef(12_000);
   const refreshingRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+  /** 界面正在显示的这份数据是什么时候从站点拿到的，null 表示还没有任何数据。 */
+  const [dataSavedAt, setDataSavedAt] = useState<number | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitStatus | null>(null);
+  /** 每次成功加载自增，触发落盘（effect 里读到的是已经提交的最新 state）。 */
+  const [persistTick, setPersistTick] = useState(0);
+  /** 跨窗口切换时对比用：监听回调里拿不到最新的 session state。 */
+  const sessionRef = useRef<StoredSession | null>(loadSession());
+
+  useEffect(() => subscribeRateLimit(setRateLimit), []);
+
+  /** 把缓存里的快照铺回界面。限流时界面显示的就是这份数据，并带降级提示。 */
+  const applySnapshot = useCallback((snapshot: DashboardSnapshot) => {
+    setStatus(snapshot.status);
+    setUser(snapshot.user);
+    setLogStat(snapshot.logStat);
+    setTokens(snapshot.tokens);
+    setNotice(snapshot.notice);
+    setGroups(snapshot.groups);
+    setModels(snapshot.models);
+    setQuotaDates(snapshot.quotaDates);
+    setUsageLogs(snapshot.usageLogs);
+    setTopUpInfo(snapshot.topUpInfo);
+    setTopUps(snapshot.topUps);
+    setCheckin(snapshot.checkin);
+    setSubscriptionPlans(snapshot.subscriptionPlans);
+    setSubscriptionSelf(snapshot.subscriptionSelf);
+    setAffCode(snapshot.affCode);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -113,13 +169,18 @@ function MainApp() {
       // The window tracks which account is active; a token rotated in the
       // background is the same account, and re-rendering it would restart
       // the dashboard load that produced the write.
-      setSession((prev) => {
-        const next = loadSession();
-        if (prev && next && isSameAccount(prev, next)) {
-          return prev;
-        }
-        return next;
-      });
+      const previous = sessionRef.current;
+      const next = loadSession();
+      sessionRef.current = next;
+      if (previous && next && isSameAccount(previous, next)) {
+        return;
+      }
+      // 另一个窗口换了账号或退出了：旧账号的数据（以及它的缓存降级提示）
+      // 不能留在界面上。
+      if (previous && !(next && isSameAccount(previous, next))) {
+        resetDashboardData();
+      }
+      setSession(next);
     }).then((cleanup) => {
       if (disposed) {
         cleanup();
@@ -135,6 +196,7 @@ function MainApp() {
 
   function resetDashboardData() {
     hasDataRef.current = false;
+    setDataSavedAt(null);
     setStatus(null);
     setUser(null);
     setLogStat(null);
@@ -202,8 +264,16 @@ function MainApp() {
       window.clearTimeout(rateLimitRetryRef.current);
       rateLimitRetryRef.current = null;
     }
+    const activeAccountId = accountIdOf(session);
+    // 冷启动先铺缓存：还没有任何数据时，站点限流不该让界面空着。
+    if (!hasDataRef.current) {
+      const cached = readSnapshot(activeAccountId);
+      if (cached) {
+        applySnapshot(cached.data);
+        setDataSavedAt(cached.savedAt);
+      }
+    }
     try {
-      const activeAccountId = accountIdOf(session);
       const activeClient = new NewApiClient(session.baseUrl, activeAccountId);
       const [nextStatus, nextUser, nextTokens, nextStat] = await Promise.all([
         activeClient.getStatus(),
@@ -216,6 +286,7 @@ function MainApp() {
       setTokens(nextTokens);
       setLogStat(nextStat);
       hasDataRef.current = true;
+      setDataSavedAt(null);
       rateLimitBackoffRef.current = 12_000;
       await loadExtras(activeClient);
       // Merge into whatever is stored now: a refresh triggered by one of the
@@ -227,6 +298,8 @@ function MainApp() {
           storeSession(merged);
         }
       }
+      // 记号推进后，下面的 effect 会把这个账号的新快照写进磁盘缓存。
+      setPersistTick((t) => t + 1);
     } catch (loadError) {
       if (loadError instanceof SessionExpiredError) {
         resetDashboardData();
@@ -235,10 +308,13 @@ function MainApp() {
         setError(loadError.message);
         return;
       }
-      if (loadError instanceof RateLimitError && hasDataRef.current) {
+      if (loadError instanceof RateLimitError) {
         // 429 只说明这一轮刷新被限流，看板里已有的数据仍然准确：保留它并稍后重试
-        message.warning('站点接口限流（429），已保留上一次数据，稍后自动重试');
-        scheduleRateLimitRetry();
+        if (hasDataRef.current) {
+          message.warning('站点接口限流（429），已保留上一次数据，稍后自动重试');
+        }
+        // 连缓存都没有时也继续重试，直到真正拿到数据为止
+        scheduleRateLimitRetry(loadError.retryAfterMs);
         return;
       }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -255,17 +331,62 @@ function MainApp() {
     }
   }, [session]);
 
-  function scheduleRateLimitRetry() {
+  // 每次成功刷新后把看板快照落盘；下次冷启动或限流时用它顶着。
+  useEffect(() => {
+    if (!session || persistTick === 0) {
+      return;
+    }
+    const snapshot: DashboardSnapshot = {
+      status,
+      user,
+      logStat,
+      tokens,
+      notice,
+      groups,
+      models,
+      quotaDates,
+      usageLogs,
+      topUpInfo,
+      topUps,
+      checkin,
+      subscriptionPlans,
+      subscriptionSelf,
+      affCode,
+    };
+    writeCache(cacheKey(accountIdOf(session), SNAPSHOT_NAME), snapshot);
+  }, [
+    persistTick,
+    session,
+    status,
+    user,
+    logStat,
+    tokens,
+    notice,
+    groups,
+    models,
+    quotaDates,
+    usageLogs,
+    topUpInfo,
+    topUps,
+    checkin,
+    subscriptionPlans,
+    subscriptionSelf,
+    affCode,
+  ]);
+
+  function scheduleRateLimitRetry(retryAfterMs: number | null) {
     if (!loadSession() || rateLimitRetryRef.current !== null) {
       return;
     }
-    const delay = rateLimitBackoffRef.current;
+    // 服务端给了 Retry-After 就照它的时间等，否则用客户端自己的退避节奏。
+    const delay =
+      retryAfterMs !== null ? Math.max(retryAfterMs, 3_000) : rateLimitBackoffRef.current;
     rateLimitRetryRef.current = window.setTimeout(() => {
       rateLimitRetryRef.current = null;
       if (loadSession()) {
         void loadDashboard();
       }
-    }, delay);
+    }, Math.min(delay, 120_000));
     // Still limited? Ask again later, not again soon.
     rateLimitBackoffRef.current = Math.min(rateLimitBackoffRef.current * 2, 60_000);
   }
@@ -295,9 +416,15 @@ function MainApp() {
     },
   });
 
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
   function handleLoggedIn() {
     setAddingAccount(false);
-    setSession(loadSession());
+    const next = loadSession();
+    sessionRef.current = next;
+    setSession(next);
     setAccounts(listAccounts());
   }
 
@@ -314,7 +441,9 @@ function MainApp() {
   function handleSwitchAccount(accountId: string) {
     setActiveAccount(accountId);
     resetDashboardData();
-    setSession(loadSession());
+    const next = loadSession();
+    sessionRef.current = next;
+    setSession(next);
     setAccounts(listAccounts());
   }
 
@@ -326,8 +455,11 @@ function MainApp() {
       } else {
         removeAccount(accountId);
       }
+      clearCachePrefix(accountId);
       resetDashboardData();
-      setSession(loadSession());
+      const next = loadSession();
+      sessionRef.current = next;
+      setSession(next);
       setAccounts(listAccounts());
     })();
   }
@@ -395,6 +527,8 @@ function MainApp() {
       loading={loading}
       loadingExtras={loadingExtras}
       error={error}
+      dataSavedAt={dataSavedAt}
+      rateLimit={rateLimit}
       onRefresh={() => void loadDashboard()}
       onSwitchAccount={handleSwitchAccount}
       onRemoveAccount={handleRemoveAccount}

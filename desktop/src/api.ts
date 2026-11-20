@@ -1,6 +1,13 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { emit } from '@tauri-apps/api/event';
 import { encryptLoginPassword } from './crypto/login-crypto';
+import {
+  acquireSlot,
+  noteLimited,
+  noteServed,
+  releaseSlot,
+  type RateLimitClass,
+} from './rate-limit';
 import type {
   ApiEnvelope,
   CheckinResult,
@@ -44,15 +51,6 @@ const PAGE_SIZE = 100;
 const MAX_TOKEN_PAGES = 20;
 const REQUEST_TIMEOUT_MS = 20_000;
 
-/** new-api rate-limits bursts, so the dashboard's parallel fan-out stays polite. */
-const MAX_INBOUND_CONCURRENCY = 3;
-const REQUEST_MIN_GAP_MS = 90;
-// One retry is enough for a blip; burning more attempts during a ban only
-// extends it. The dashboard's own retry loop handles the slow comeback.
-const RATE_LIMIT_MAX_RETRIES = 1;
-const RATE_LIMIT_BACKOFF_MS = 800;
-const RATE_LIMIT_WAIT_CAP_MS = 10_000;
-
 /** Shown in place of new-api's raw "无权进行此操作，未登录且未提供 access token" reply. */
 const SESSION_EXPIRED_MESSAGE = '登录状态已失效，请重新登录';
 
@@ -75,17 +73,19 @@ export class LoginVerificationRequiredError extends Error {
   }
 }
 
-/** Thrown when the site keeps answering 429 after the client retried with backoff. */
+/**
+ * Thrown when new-api answers 429 and the client's own budget has nothing left
+ * to spend. Callers keep the last cached data on screen and retry later.
+ */
 export class RateLimitError extends Error {
   readonly retryAfterMs: number | null;
+  readonly limited: boolean;
 
-  constructor(
-    message = '站点接口限流（429），请求过于频繁，请稍后重试',
-    retryAfterMs: number | null = null,
-  ) {
-    super(message);
+  constructor(retryAfterMs: number | null = null) {
+    super('站点接口限流（429），已保留上一次数据，稍后自动重试');
     this.name = 'RateLimitError';
     this.retryAfterMs = retryAfterMs;
+    this.limited = true;
   }
 }
 
@@ -173,29 +173,31 @@ function collectHeaders(headers: Headers | Record<string, string>): Record<strin
 function getRefreshCookie(headers: Record<string, string>): string | undefined {
   const header = headers['set-cookie'] ?? '';
   const match = /new_api_refresh=([^;]+)/i.exec(header);
-  return match ? decodeURIComponent(match[1]) : undefined;
+  if (!match) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    // A stray percent sign must not take the whole login down with it.
+    return match[1];
+  }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-/** How long to wait before resending after a 429, honouring Retry-After when present. */
-function retryAfterDelayMs(headers: Record<string, string>, attempt: number): number {
+/** new-api sends Retry-After as whole seconds on its fixed-window limiter. */
+export function retryAfterMsOf(headers: Record<string, string>): number | null {
   const raw = (headers['retry-after'] ?? '').trim();
   if (raw) {
     const seconds = Number(raw);
     if (Number.isFinite(seconds) && seconds >= 0) {
-      return Math.min(Math.max(seconds * 1000, 250), RATE_LIMIT_WAIT_CAP_MS);
+      return seconds * 1000;
     }
     const at = Date.parse(raw);
     if (Number.isFinite(at)) {
-      return Math.min(Math.max(at - Date.now(), 250), RATE_LIMIT_WAIT_CAP_MS);
+      return at - Date.now();
     }
   }
-  return Math.min(RATE_LIMIT_BACKOFF_MS * 2 ** attempt, RATE_LIMIT_WAIT_CAP_MS);
+  return null;
 }
 
 /** Refresh a moment before the server would reject the token, not after. */
@@ -258,49 +260,15 @@ function isAuthFailure(response: RawResponse): boolean {
   return AUTH_FAILURE_PATTERN.test(response.data.message ?? '');
 }
 
-type RequestGate = {
-  active: number;
-  nextStartAt: number;
-  waiters: Array<() => void>;
-  timer: number | null;
-};
+/**
+ * 关键路由：new-api 在这几条上挂着 20 次 / 20 分钟的独立预算，
+ * 一旦被拒，令牌刷新与登出会一起停摆，所以它们单独计数、单独退避。
+ */
+const CRITICAL_ROUTE_PATTERN =
+  /^\/api\/user\/(auth\/|login)|^\/api\/token\/(?:\d+\/key|batch\/keys)/;
 
-const requestGate: RequestGate = { active: 0, nextStartAt: 0, waiters: [], timer: null };
-
-function pumpRequestGate(): void {
-  if (requestGate.timer !== null) {
-    window.clearTimeout(requestGate.timer);
-    requestGate.timer = null;
-  }
-  while (
-    requestGate.active < MAX_INBOUND_CONCURRENCY &&
-    requestGate.waiters.length > 0 &&
-    Date.now() >= requestGate.nextStartAt
-  ) {
-    const wake = requestGate.waiters.shift();
-    requestGate.nextStartAt = Date.now() + REQUEST_MIN_GAP_MS;
-    requestGate.active += 1;
-    wake?.();
-  }
-  if (requestGate.active < MAX_INBOUND_CONCURRENCY && requestGate.waiters.length > 0) {
-    const delay = Math.max(20, requestGate.nextStartAt - Date.now());
-    requestGate.timer = window.setTimeout(() => {
-      requestGate.timer = null;
-      pumpRequestGate();
-    }, delay);
-  }
-}
-
-function acquireRequestSlot(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    requestGate.waiters.push(resolve);
-    pumpRequestGate();
-  });
-}
-
-function releaseRequestSlot(): void {
-  requestGate.active = Math.max(0, requestGate.active - 1);
-  pumpRequestGate();
+function rateLimitClassOf(path: string): RateLimitClass {
+  return CRITICAL_ROUTE_PATTERN.test(path) ? 'critical' : 'global';
 }
 
 function notifyAccountsChanged(): void {
@@ -510,6 +478,11 @@ export class NewApiClient {
     return `${this.baseUrl}${path}`;
   }
 
+  /**
+   * 走客户端的请求预算（见 rate-limit.ts）发一个请求：预算不足时排队等待，
+   * 而不是让服务端回 429。返回 429 时不在这里重试——服务端给出的等待时间
+   * 会作为退避写进预算，由调用方决定是否还要再发一次。
+   */
   private async rawRequest(
     path: string,
     init: {
@@ -518,14 +491,22 @@ export class NewApiClient {
       body?: string;
     } = {},
   ): Promise<RawResponse> {
-    await acquireRequestSlot();
+    const cls = rateLimitClassOf(path);
+    await acquireSlot(cls === 'critical');
     try {
-      return await this.sendRequest(path, init);
+      const response = await this.sendRequest(path, init);
+      if (response.status === 429) {
+        noteLimited(cls, retryAfterMsOf(response.headers));
+      } else {
+        noteServed();
+      }
+      return response;
     } finally {
-      releaseRequestSlot();
+      releaseSlot();
     }
   }
 
+  /** Sends a request once the budget grants a slot. */
   private async sendRequest(
     path: string,
     init: {
@@ -582,21 +563,15 @@ export class NewApiClient {
     }
   }
 
-  /** Sends a request through the gate, retrying 429s with backoff. */
+  /**
+   * 发送一个请求。429 由调用方决定是否重发：预刷新与 401 重试必须再发一次，
+   * 看板的常规读请求则直接把限流状态抛出去，让上层用缓存数据兜底。
+   */
   private async fetchThrough(
     path: string,
     init: Parameters<NewApiClient['sendRequest']>[1],
   ): Promise<RawResponse> {
-    for (let attempt = 0; ; attempt += 1) {
-      const response = await this.rawRequest(path, init);
-      if (response.status !== 429) {
-        return response;
-      }
-      if (attempt >= RATE_LIMIT_MAX_RETRIES) {
-        throw new RateLimitError();
-      }
-      await sleep(retryAfterDelayMs(response.headers, attempt));
-    }
+    return this.rawRequest(path, init);
   }
 
   private async request<T>(
@@ -618,10 +593,18 @@ export class NewApiClient {
       Date.now() - this.lastProactiveRefreshAt > PROACTIVE_REFRESH_COOLDOWN_MS &&
       accessTokenNeedsRefresh(current)
     ) {
-      const refreshed = await this.tryRefresh(current);
-      if (refreshed) {
-        this.lastProactiveRefreshAt = Date.now();
-        current = refreshed;
+      try {
+        const refreshed = await this.tryRefresh(current);
+        if (refreshed) {
+          this.lastProactiveRefreshAt = Date.now();
+          current = refreshed;
+        }
+      } catch (refreshError) {
+        // The critical budget is spent: surface the limit instead of sending
+        // the request with a token the server is about to reject anyway.
+        if (refreshError instanceof RateLimitError) {
+          throw refreshError;
+        }
       }
     }
     if (current?.access_token) {
@@ -629,14 +612,28 @@ export class NewApiClient {
     }
 
     let response = await this.fetchThrough(path, { ...sendInit, headers });
+    if (response.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (isAuthFailure(response)) {
-      const refreshed = current?.refresh_token ? await this.tryRefresh(current) : null;
+      let refreshed: StoredSession | null = null;
+      try {
+        refreshed = current?.refresh_token ? await this.tryRefresh(current) : null;
+      } catch (refreshError) {
+        // Rate-limited refresh: the session is still alive, just throttled.
+        if (refreshError instanceof RateLimitError) {
+          throw refreshError;
+        }
+      }
       if (refreshed?.access_token) {
         // Retry with the token the refresh just produced: re-reading the store
         // could miss it and send the request unauthenticated.
         current = refreshed;
         headers.Authorization = `Bearer ${refreshed.access_token}`;
         response = await this.fetchThrough(path, { ...sendInit, headers });
+        if (response.status === 429) {
+          throw new RateLimitError(retryAfterMsOf(response.headers));
+        }
       }
       if (!refreshed?.access_token || isAuthFailure(response)) {
         this.dropSession(current ?? session);
@@ -655,13 +652,19 @@ export class NewApiClient {
     // not each redeem the same token; the losers would look like a dead session.
     if (!this.refreshInFlight) {
       this.refreshInFlight = this.refresh(session)
-        .catch(() => null)
+        .catch((error: unknown) => {
+          // A rate limit is not a dead session. Swallowing it here would make
+          // the caller drop the account, so let it propagate instead.
+          if (error instanceof RateLimitError) {
+            throw error;
+          }
+          return null;
+        })
         .finally(() => {
           this.refreshInFlight = null;
         });
     }
     return this.refreshInFlight;
-
   }
 
   getStatus(): Promise<NewApiStatus> {
@@ -672,6 +675,9 @@ export class NewApiClient {
   /** GET /api/user/login/encryption-key; enabled is false when the site does not encrypt passwords. */
   async getEncryptionKey(): Promise<EncryptionKeyInfo> {
     const response = await this.rawRequest('/api/user/login/encryption-key');
+    if (response.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to load the login encryption key');
     }
@@ -707,6 +713,9 @@ export class NewApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (login.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(login.headers));
+    }
     if (!login.data.success) {
       throw new Error(login.data.message || 'Login failed');
     }
@@ -757,8 +766,12 @@ export class NewApiClient {
     const response = await this.rawRequest('/api/user/login/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ flow_token: flowToken, code: code.trim() }),
+      // new-api reads `method` from the body and falls back to 2FA; say it outright.
+      body: JSON.stringify({ flow_token: flowToken, code: code.trim(), method: '2fa' }),
     });
+    if (response.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (!response.data.success) {
       throw new Error(response.data.message || 'Login verification failed');
     }
@@ -794,6 +807,10 @@ export class NewApiClient {
       },
       body: '{}',
     });
+    if (response.status === 429) {
+      // The session is fine; the client just hit the critical-route budget.
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (!response.data.success) {
       throw new SessionExpiredError(response.data.message || 'Refresh failed');
     }

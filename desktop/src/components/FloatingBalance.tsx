@@ -20,8 +20,19 @@ import type { StoredSession } from '../api';
 import type { NewApiStatus, SelfUser } from '../types';
 import { useSleepWatchdog } from '../hooks/useSleepWatchdog';
 import FittedText from './FittedText';
+import { cacheKey, formatCacheAge, readCache, writeCache } from '../cache';
+import { subscribeRateLimit } from '../rate-limit';
+import type { RateLimitStatus } from '../rate-limit';
 
 const REFRESH_INTERVAL_MS = 30000;
+
+/** 浮动窗只需要余额和站点信息，缓存也只存这两个。 */
+type BalanceSnapshot = {
+  status: NewApiStatus | null;
+  user: SelfUser | null;
+};
+
+const SNAPSHOT_NAME = 'balance';
 
 export default function FloatingBalance() {
   const [session, setSession] = useState<StoredSession | null>(() => loadSession());
@@ -30,8 +41,14 @@ export default function FloatingBalance() {
   const [user, setUser] = useState<SelfUser | null>(session?.user ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [dataSavedAt, setDataSavedAt] = useState<number | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitStatus | null>(null);
   const refreshingRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+  /** 已经有实时数据时不再用缓存铺底，否则每轮轮询会闪一下旧值。 */
+  const hasDataRef = useRef(false);
+
+  useEffect(() => subscribeRateLimit(setRateLimit), []);
 
   useEffect(() => {
     let disposed = false;
@@ -75,15 +92,31 @@ export default function FloatingBalance() {
     refreshingRef.current = true;
     setLoading(true);
     setError('');
+    // 冷启动或第一次被限流时，先把上次的余额顶上去，窗口不空。
+    if (!hasDataRef.current) {
+      const cached = readCache<BalanceSnapshot>(cacheKey(accountIdOf(session), SNAPSHOT_NAME));
+      if (cached?.data) {
+        setStatus(cached.data.status);
+        setUser(cached.data.user);
+        setDataSavedAt(cached.savedAt);
+      }
+    }
     try {
       const client = new NewApiClient(session.baseUrl, accountIdOf(session));
       const [nextStatus, nextUser] = await Promise.all([client.getStatus(), client.getSelf()]);
       setStatus(nextStatus);
       setUser(nextUser);
+      setDataSavedAt(null);
+      hasDataRef.current = true;
+      writeCache(cacheKey(accountIdOf(session), SNAPSHOT_NAME), {
+        status: nextStatus,
+        user: nextUser,
+      });
     } catch (loadError) {
       if (loadError instanceof RateLimitError) {
         // 浮动窗很小，限流时只留一行提示，数字继续显示上一次的结果
-        setError('限流（429），稍后重试');
+        const seconds = loadError.retryAfterMs ? Math.ceil(loadError.retryAfterMs / 1000) : null;
+        setError(seconds ? `限流，${seconds} 秒后重试` : '限流，稍后重试');
         return;
       }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -153,9 +186,11 @@ export default function FloatingBalance() {
 
   function handleAccountSwitch(accountId: string) {
     setActiveAccount(accountId);
+    hasDataRef.current = false;
     setAccounts(listAccounts());
     setSession(loadSession());
     setUser(loadSession()?.user ?? null);
+    setDataSavedAt(null);
   }
 
   if (!session) {
@@ -201,6 +236,14 @@ export default function FloatingBalance() {
       {error ? (
         <Typography.Text type="danger" className="floating-error">
           {error}
+        </Typography.Text>
+      ) : null}
+      {dataSavedAt !== null ? (
+        <Typography.Text type="warning" className="floating-error">
+          缓存 {formatCacheAge(dataSavedAt)}
+          {rateLimit?.limited && rateLimit.retryInMs
+            ? ` · ${Math.ceil(rateLimit.retryInMs / 1000)}s 后重试`
+            : ''}
         </Typography.Text>
       ) : null}
       <div className="floating-metrics">

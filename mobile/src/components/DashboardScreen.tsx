@@ -12,6 +12,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { accountIdOf, formatQuota, hostOf } from '../api';
 import type { StoredSession } from '../api';
+import { formatCacheAge } from '../cache';
+import type { RateLimitStatus } from '../rate-limit';
 import type { LogStat, NewApiStatus, SelfUser, TokenItem } from '../types';
 import StatCard from './StatCard';
 import { colors, radius, spacing } from '../theme';
@@ -26,12 +28,34 @@ export type DashboardScreenProps = {
   activeAccountId: string | null;
   loading: boolean;
   error: string;
+  /** 界面当前显示的数据取自缓存时的时间戳；null 表示本轮是实时数据。 */
+  dataSavedAt: number | null;
+  rateLimit: RateLimitStatus | null;
   onRefresh: () => void;
   onLogout: () => void;
   onSwitchAccount: (accountId: string) => void;
   onRemoveAccount: (accountId: string) => void;
   onAddAccount: () => void;
 };
+
+/** 限流降级提示文案。站点频率上限到了就明说，不静默用旧数据糊弄。 */
+function degradeText(dataSavedAt: number | null, rateLimit: RateLimitStatus | null): string {
+  const parts: string[] = [];
+  if (dataSavedAt !== null) {
+    parts.push(`显示的是 ${formatCacheAge(dataSavedAt)}缓存的数据`);
+  } else {
+    parts.push('已暂停本轮刷新，显示上一次的数据');
+  }
+  if (rateLimit?.limited) {
+    const seconds = rateLimit.retryInMs ? Math.ceil(rateLimit.retryInMs / 1000) : null;
+    parts.push(
+      seconds
+        ? `站点频率已到上限（${rateLimit.cls === 'critical' ? '登录/令牌' : '接口'}档），${seconds} 秒后重试`
+        : '站点频率已到上限，稍后重试',
+    );
+  }
+  return parts.join('；');
+}
 
 function maskKey(key: string): string {
   if (key.length <= 12) {
@@ -59,6 +83,8 @@ export default function DashboardScreen({
   activeAccountId,
   loading,
   error,
+  dataSavedAt,
+  rateLimit,
   onRefresh,
   onLogout,
   onSwitchAccount,
@@ -70,6 +96,7 @@ export default function DashboardScreen({
   const remaining = formatQuota(user?.quota ?? 0, status);
   const used = formatQuota(user?.used_quota ?? 0, status);
   const consumed = formatQuota(logStat?.quota ?? 0, status);
+  const degraded = Boolean(rateLimit?.limited || dataSavedAt !== null);
 
   function confirmRemove(accountId: string) {
     Alert.alert(
@@ -125,6 +152,12 @@ export default function DashboardScreen({
       {error ? (
         <View style={styles.alert}>
           <Text style={styles.alertText}>{error}</Text>
+        </View>
+      ) : null}
+      {degraded ? (
+        <View style={styles.degraded}>
+          <Text style={styles.degradedTitle}>已降级显示缓存数据</Text>
+          <Text style={styles.degradedText}>{degradeText(dataSavedAt, rateLimit)}</Text>
         </View>
       ) : null}
 
@@ -321,6 +354,22 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontSize: 13,
     lineHeight: 18,
+  },
+  degraded: {
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+    gap: 2,
+  },
+  degradedTitle: {
+    color: colors.warning,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  degradedText: {
+    color: colors.warning,
+    fontSize: 12,
+    lineHeight: 17,
   },
   balanceCard: {
     backgroundColor: colors.primary,

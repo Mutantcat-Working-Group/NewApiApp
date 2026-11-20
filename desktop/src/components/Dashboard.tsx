@@ -43,6 +43,8 @@ import type {
 import TokenManager from './TokenManager';
 import AccountSwitcher from './AccountSwitcher';
 import FittedText from './FittedText';
+import { formatCacheAge } from '../cache';
+import type { RateLimitStatus } from '../rate-limit';
 
 type DashboardProps = {
   session: StoredSession;
@@ -66,6 +68,9 @@ type DashboardProps = {
   loading: boolean;
   loadingExtras: boolean;
   error: string;
+  /** 界面当前显示的数据取自缓存时的时间戳；null 表示本轮是实时数据。 */
+  dataSavedAt: number | null;
+  rateLimit: RateLimitStatus | null;
   onRefresh: () => void;
   onSwitchAccount: (accountId: string) => void;
   onRemoveAccount: (accountId: string) => void;
@@ -187,6 +192,8 @@ export default function Dashboard({
   loading,
   loadingExtras,
   error,
+  dataSavedAt,
+  rateLimit,
   onRefresh,
   onSwitchAccount,
   onRemoveAccount,
@@ -204,6 +211,33 @@ export default function Dashboard({
   const maxDayQuota = Math.max(0, ...dayUsage.map((entry) => entry.quota));
   const todayCheckedIn = checkin?.stats?.checked_in_today ?? false;
   const activeSubscriptions = subscriptionSelf?.subscriptions ?? [];
+
+  // 限流降级提示：只要界面上的数字来自缓存，就明确说出来，不静默。
+  // 排队是正常节流，不单独提示；只在被服务端按住或数据确实是缓存时才提醒。
+  const limited = Boolean(rateLimit?.limited);
+  const showingCache = dataSavedAt !== null;
+  const degraded = limited || showingCache;
+  const degradeReason = (() => {
+    if (!degraded) {
+      return '';
+    }
+    const parts: string[] = [];
+    if (showingCache) {
+      parts.push(`当前显示的是${formatCacheAge(dataSavedAt)}缓存的数据，不是实时值。`);
+    } else {
+      parts.push('已停用本轮刷新，界面保留上一次的实时数据。');
+    }
+    if (limited) {
+      const seconds = rateLimit?.retryInMs ? Math.ceil(rateLimit.retryInMs / 1000) : null;
+      parts.push(
+        seconds
+          ? `站点请求频率已到上限（${rateLimit?.cls === 'critical' ? '登录/令牌' : '接口'}档），${seconds} 秒后自动重试。`
+          : '站点请求频率已到上限，稍后自动重试。',
+      );
+    }
+    parts.push('需要立即取回最新数据可以点右上角「刷新」。');
+    return parts.join('');
+  })();
 
   async function handleRedeem() {
     const key = redeemKey.trim();
@@ -362,6 +396,15 @@ export default function Dashboard({
       </Card>
 
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 0 }} /> : null}
+      {degraded ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 0 }}
+          message="已降级显示缓存数据"
+          description={degradeReason}
+        />
+      ) : null}
       {notice ? (
         <Alert
           type="info"

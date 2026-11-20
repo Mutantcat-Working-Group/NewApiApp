@@ -14,12 +14,24 @@ import {
 import {
   LoginVerificationRequiredError,
   NewApiClient,
+  RateLimitError,
   accountIdOf,
   hostOf,
 } from '../api';
 import type { StoredSession } from '../api';
 import type { LoginChallenge } from '../types';
 import { colors, radius, spacing } from '../theme';
+
+/** 登录与验证码走的是 new-api 的关键路由限额（默认 20 次 / 20 分钟）。 */
+function describeLoginError(error: unknown): string {
+  if (error instanceof RateLimitError) {
+    const seconds = error.retryAfterMs ? Math.ceil(error.retryAfterMs / 1000) : null;
+    return seconds
+      ? `站点登录接口已限流（429），请等待约 ${seconds} 秒后再试`
+      : '站点登录接口已限流（429），请稍后再试';
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
 export type LoginFormProps = {
   onLoggedIn: () => void;
@@ -92,7 +104,7 @@ export default function LoginForm({
       }
       onLoggedIn();
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : String(loginError));
+      setError(describeLoginError(loginError));
     } finally {
       setLoading(false);
     }
@@ -111,7 +123,7 @@ export default function LoginForm({
       );
       onLoggedIn();
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : String(loginError));
+      setError(describeLoginError(loginError));
     } finally {
       setLoading(false);
     }

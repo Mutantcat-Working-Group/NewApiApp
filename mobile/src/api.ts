@@ -1,5 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { encryptLoginPassword } from './crypto/login-crypto';
+import {
+  acquireSlot,
+  noteLimited,
+  noteServed,
+  releaseSlot,
+  type RateLimitClass,
+} from './rate-limit';
 import type {
   ApiEnvelope,
   EncryptionKeyInfo,
@@ -49,6 +56,49 @@ export class LoginVerificationRequiredError extends Error {
     this.name = 'LoginVerificationRequiredError';
     this.challenge = challenge;
   }
+}
+
+/**
+ * new-api 返回 429 时抛出。调用方保留界面上的缓存数据并稍后重试，
+ * 因为 429 只说明这一轮被限流，不代表账号或数据有问题。
+ */
+export class RateLimitError extends Error {
+  readonly retryAfterMs: number | null;
+  readonly limited: boolean;
+
+  constructor(retryAfterMs: number | null = null) {
+    super('站点接口限流（429），已保留上一次数据，稍后自动重试');
+    this.name = 'RateLimitError';
+    this.retryAfterMs = retryAfterMs;
+    this.limited = true;
+  }
+}
+
+/** new-api 把 Retry-After 写成整数秒（固定窗口限流器）。 */
+export function retryAfterMsOf(headers: Record<string, string>): number | null {
+  const raw = (headers['retry-after'] ?? '').trim();
+  if (raw) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+    const at = Date.parse(raw);
+    if (Number.isFinite(at)) {
+      return at - Date.now();
+    }
+  }
+  return null;
+}
+
+/**
+ * 登录、刷新、登出和令牌密钥读取走的是 new-api 的 CriticalRateLimit
+ * （默认 20 次 / 20 分钟），比整个 /api 分组的限额紧得多，单独一档排队。
+ */
+const CRITICAL_ROUTE_PATTERN =
+  /^\/api\/user\/(auth\/|login)|^\/api\/token\/(?:\d+\/key|batch\/keys)/;
+
+function rateLimitClassOf(path: string): RateLimitClass {
+  return CRITICAL_ROUTE_PATTERN.test(path) ? 'critical' : 'global';
 }
 
 type RawResponse = {
@@ -363,6 +413,11 @@ export class NewApiClient {
     return `${this.baseUrl}${path}`;
   }
 
+  /**
+   * 走客户端的请求预算（见 rate-limit.ts）发一个请求：预算不足时排队等待，
+   * 而不是让服务端回 429。返回 429 时不在这里重试——服务端给出的等待时间
+   * 会作为退避写进预算，由调用方决定是否还要再发一次。
+   */
   private async rawRequest(
     path: string,
     init: {
@@ -371,30 +426,42 @@ export class NewApiClient {
       body?: string;
     } = {},
   ): Promise<RawResponse> {
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      // 让 new-api 的错误提示按中文返回（语言回退链：用户设置 -> 上下文 -> 请求头 -> 默认）
-      'Accept-Language': 'zh-CN',
-      ...(init.headers ?? {}),
-    };
-    const response = await fetch(this.endpoint(path), {
-      method: init.method ?? 'GET',
-      headers,
-      body: init.body,
-    });
-    const responseHeaders = collectHeaders(response.headers);
-    let data: ApiEnvelope<unknown> = { success: response.ok };
+    const cls = rateLimitClassOf(path);
+    await acquireSlot(cls === 'critical');
     try {
-      data = (await response.json()) as ApiEnvelope<unknown>;
-    } catch {
-      data = { success: response.ok };
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        // 让 new-api 的错误提示按中文返回（语言回退链：用户设置 -> 上下文 -> 请求头 -> 默认）
+        'Accept-Language': 'zh-CN',
+        ...(init.headers ?? {}),
+      };
+      const response = await fetch(this.endpoint(path), {
+        method: init.method ?? 'GET',
+        headers,
+        body: init.body,
+      });
+      const responseHeaders = collectHeaders(response.headers);
+      let data: ApiEnvelope<unknown> = { success: response.ok };
+      try {
+        data = (await response.json()) as ApiEnvelope<unknown>;
+      } catch {
+        data = { success: response.ok };
+      }
+      const result: RawResponse = {
+        ok: response.ok,
+        status: response.status,
+        data,
+        headers: responseHeaders,
+      };
+      if (result.status === 429) {
+        noteLimited(cls, retryAfterMsOf(result.headers));
+      } else {
+        noteServed();
+      }
+      return result;
+    } finally {
+      releaseSlot();
     }
-    return {
-      ok: response.ok,
-      status: response.status,
-      data,
-      headers: responseHeaders,
-    };
   }
 
   private async request<T>(
@@ -416,10 +483,17 @@ export class NewApiClient {
       Date.now() - this.lastProactiveRefreshAt > PROACTIVE_REFRESH_COOLDOWN_MS &&
       accessTokenNeedsRefresh(current)
     ) {
-      const refreshed = await this.tryRefresh(current);
-      if (refreshed) {
-        this.lastProactiveRefreshAt = Date.now();
-        current = refreshed;
+      try {
+        const refreshed = await this.tryRefresh(current);
+        if (refreshed) {
+          this.lastProactiveRefreshAt = Date.now();
+          current = refreshed;
+        }
+      } catch (refreshError) {
+        // 关键路由预算已用完：直接把限流抛出去，别用必将被拒的令牌再发一次。
+        if (refreshError instanceof RateLimitError) {
+          throw refreshError;
+        }
       }
     }
     if (current?.access_token) {
@@ -427,13 +501,27 @@ export class NewApiClient {
     }
 
     let response = await this.rawRequest(path, { ...sendInit, headers });
+    if (response.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (isAuthFailure(response)) {
-      const refreshed = current?.refresh_token ? await this.tryRefresh(current) : null;
+      let refreshed: StoredSession | null = null;
+      try {
+        refreshed = current?.refresh_token ? await this.tryRefresh(current) : null;
+      } catch (refreshError) {
+        // 刷新被限流不代表会话失效，别把账号丢掉。
+        if (refreshError instanceof RateLimitError) {
+          throw refreshError;
+        }
+      }
       if (refreshed?.access_token) {
         // 用刷新刚拿到的令牌重试：重新读存储可能取不到，请求就光着出去了。
         current = refreshed;
         headers.Authorization = `Bearer ${refreshed.access_token}`;
         response = await this.rawRequest(path, { ...sendInit, headers });
+        if (response.status === 429) {
+          throw new RateLimitError(retryAfterMsOf(response.headers));
+        }
       }
       if (!refreshed?.access_token || isAuthFailure(response)) {
         await this.dropSession(current ?? session);
@@ -452,13 +540,18 @@ export class NewApiClient {
     // not each redeem the same token; the losers would look like a dead session.
     if (!this.refreshInFlight) {
       this.refreshInFlight = this.refresh(session)
-        .catch(() => null)
+        .catch((error: unknown) => {
+          // 限流不是会话失效：吞掉它会让调用方误删账号。
+          if (error instanceof RateLimitError) {
+            throw error;
+          }
+          return null;
+        })
         .finally(() => {
           this.refreshInFlight = null;
         });
     }
     return this.refreshInFlight;
-
   }
 
   getStatus(): Promise<NewApiStatus> {
@@ -469,6 +562,9 @@ export class NewApiClient {
   /** GET /api/user/login/encryption-key，站点未开启加密时 enabled 为 false。 */
   async getEncryptionKey(): Promise<EncryptionKeyInfo> {
     const response = await this.rawRequest('/api/user/login/encryption-key');
+    if (response.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (!response.data.success) {
       throw new Error(response.data.message || '获取登录加密公钥失败');
     }
@@ -502,6 +598,9 @@ export class NewApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (login.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(login.headers));
+    }
     if (!login.data.success) {
       throw new Error(login.data.message || '登录失败');
     }
@@ -551,8 +650,11 @@ export class NewApiClient {
     const response = await this.rawRequest('/api/user/login/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ flow_token: flowToken, code: code.trim() }),
+      body: JSON.stringify({ flow_token: flowToken, code: code.trim(), method: '2fa' }),
     });
+    if (response.status === 429) {
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (!response.data.success) {
       throw new Error(response.data.message || '登录验证失败');
     }
@@ -588,12 +690,15 @@ export class NewApiClient {
       },
       body: '{}',
     });
+    if (response.status === 429) {
+      // 会话本身没问题，只是关键路由的预算用完了。
+      throw new RateLimitError(retryAfterMsOf(response.headers));
+    }
     if (!response.data.success) {
       throw new SessionExpiredError(response.data.message || '刷新会话失败');
     }
 
-    const data = response.data.data as LoginResult | undefined;
-    if (!data?.access_token) {
+    const data = response.data.data as LoginResult | undefined;    if (!data?.access_token) {
       throw new SessionExpiredError('刷新响应缺少访问令牌');
     }
     const nextRefreshToken = getRefreshCookie(response.headers) ?? session.refresh_token;

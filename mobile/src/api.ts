@@ -15,8 +15,10 @@ import type {
   LoginResult,
   NewApiStatus,
   PageResult,
+  QuotaDateItem,
   SelfUser,
   TokenItem,
+  UsageSummary,
 } from './types';
 
 export type StoredSession = {
@@ -787,4 +789,28 @@ export class NewApiClient {
       `/api/log/self/stat?start_timestamp=${dayAgo}&end_timestamp=${now}`,
     );
   }
+
+  /** 按小时聚合的自用量。new-api 用它算 near-24h 的 token 与请求次数。 */
+  getQuotaDates(startTimestamp: number, endTimestamp: number): Promise<QuotaDateItem[]> {
+    return this.request<QuotaDateItem[]>(
+      `/api/data/self?start_timestamp=${startTimestamp}&end_timestamp=${endTimestamp}`,
+    );
+  }
+}
+
+/**
+ * 把 /api/data/self 的分组行合成为 token 用量与请求次数。
+ * 只统计窗口内的行：服务端按时间过滤，但缓存或旧版本可能多给。
+ */
+export function summarizeUsage(items: QuotaDateItem[], since: number): UsageSummary {
+  let tokenUsed = 0;
+  let count = 0;
+  for (const item of items) {
+    if (item.created_at && item.created_at < since) {
+      continue;
+    }
+    tokenUsed += item.token_used ?? 0;
+    count += item.count ?? 0;
+  }
+  return { tokenUsed, count };
 }

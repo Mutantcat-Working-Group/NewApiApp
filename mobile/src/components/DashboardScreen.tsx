@@ -14,7 +14,7 @@ import { accountIdOf, formatQuota, hostOf } from '../api';
 import type { StoredSession } from '../api';
 import { formatCacheAge } from '../cache';
 import type { RateLimitStatus } from '../rate-limit';
-import type { LogStat, NewApiStatus, SelfUser, TokenItem } from '../types';
+import type { LogStat, NewApiStatus, SelfUser, TokenItem, UsageSummary } from '../types';
 import StatCard from './StatCard';
 import { colors, radius, spacing } from '../theme';
 
@@ -23,6 +23,8 @@ export type DashboardScreenProps = {
   status: NewApiStatus | null;
   user: SelfUser | null;
   logStat: LogStat | null;
+  /** 近 24 小时的 token 用量与请求次数；接口不可用时为 null。 */
+  usage: UsageSummary | null;
   tokens: TokenItem[];
   accounts: StoredSession[];
   activeAccountId: string | null;
@@ -64,6 +66,20 @@ function maskKey(key: string): string {
   return `${key.slice(0, 8)}...${key.slice(-4)}`;
 }
 
+/** 窄卡片上放不下七八位数，超过一万就折成 k/M，避免数字被截断看不清。 */
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (Math.abs(value) >= 10_000) {
+    return `${(value / 1_000).toFixed(1)}k`;
+  }
+  return value.toLocaleString('zh-CN');
+}
+
 function formatTimestamp(timestamp: number): string {
   if (!timestamp) {
     return '永久';
@@ -78,6 +94,7 @@ export default function DashboardScreen({
   status,
   user,
   logStat,
+  usage,
   tokens,
   accounts,
   activeAccountId,
@@ -173,11 +190,23 @@ export default function DashboardScreen({
 
       <View style={styles.grid}>
         <StatCard label="已用额度" value={used} />
-        <StatCard label="请求次数" value={String(user?.request_count ?? 0)} />
+        <StatCard label="累计请求次数" value={String(user?.request_count ?? 0)} />
       </View>
       <View style={styles.grid}>
         <StatCard label="近 24 小时消耗" value={consumed} />
         <StatCard label="令牌数量" value={String(tokens.length)} />
+      </View>
+      <View style={styles.grid}>
+        <StatCard
+          label="近 24 小时 Token"
+          value={usage ? formatNumber(usage.tokenUsed) : '-'}
+          hint={usage ? '输入 + 输出' : '站点未开放用量接口'}
+        />
+        <StatCard
+          label="近 24 小时请求"
+          value={usage ? formatNumber(usage.count) : '-'}
+          hint={usage ? '次' : '站点未开放用量接口'}
+        />
       </View>
       <View style={styles.grid}>
         <StatCard label="RPM" value={String(logStat?.rpm ?? 0)} hint="近 24 小时" />

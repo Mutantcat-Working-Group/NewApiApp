@@ -160,6 +160,25 @@ function groupQuotaByDay(items: QuotaDateItem[]): DayUsage[] {
     .slice(0, 14);
 }
 
+/** 一段时间内的 token 用量与请求次数合计。 */
+type UsageSummary = {
+  tokenUsed: number;
+  count: number;
+};
+
+function summarizeUsage(items: QuotaDateItem[], since: number): UsageSummary {
+  let tokenUsed = 0;
+  let count = 0;
+  for (const item of items) {
+    if (item.created_at && item.created_at < since) {
+      continue;
+    }
+    tokenUsed += item.token_used ?? 0;
+    count += item.count ?? 0;
+  }
+  return { tokenUsed, count };
+}
+
 type FittedStatisticProps = {
   title: string;
   text: string;
@@ -209,6 +228,11 @@ export default function Dashboard({
   const [checkinBusy, setCheckinBusy] = useState(false);
   const dayUsage = groupQuotaByDay(quotaDates);
   const maxDayQuota = Math.max(0, ...dayUsage.map((entry) => entry.quota));
+  // 服务端没有“近 24 小时合计”字段，只能用 30 天用量里落在窗口内的行累加。
+  const recentUsage = useMemo(
+    () => summarizeUsage(quotaDates, Math.floor(Date.now() / 1000) - 24 * 60 * 60),
+    [quotaDates],
+  );
   const todayCheckedIn = checkin?.stats?.checked_in_today ?? false;
   const activeSubscriptions = subscriptionSelf?.subscriptions ?? [];
 
@@ -428,7 +452,7 @@ export default function Dashboard({
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card className="stat-card" bordered={false} hoverable>
-            <FittedStatistic title="请求次数" text={formatCount(user?.request_count ?? 0)} />
+            <FittedStatistic title="累计请求次数" text={formatCount(user?.request_count ?? 0)} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
@@ -447,6 +471,15 @@ export default function Dashboard({
                   title="消耗额度"
                   text={formatQuota(logStat?.quota ?? 0, status)}
                 />
+              </Col>
+              <Col xs={24} sm={8} lg={24}>
+                <FittedStatistic
+                  title="Token 用量"
+                  text={formatCount(recentUsage.tokenUsed)}
+                />
+              </Col>
+              <Col xs={24} sm={8} lg={24}>
+                <FittedStatistic title="请求次数" text={formatCount(recentUsage.count)} />
               </Col>
               <Col xs={24} sm={8} lg={24}>
                 <FittedStatistic title="RPM" text={formatCount(logStat?.rpm ?? 0)} />

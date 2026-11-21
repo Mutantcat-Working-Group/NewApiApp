@@ -21,12 +21,13 @@ import {
   setActiveAccount,
   storeSession,
   sessionsEqual,
+  summarizeUsage,
 } from './src/api';
 import type { StoredSession } from './src/api';
 import { cacheKey, clearCachePrefix, readCache, writeCache } from './src/cache';
 import { subscribeRateLimit } from './src/rate-limit';
 import type { RateLimitStatus } from './src/rate-limit';
-import type { LogStat, NewApiStatus, SelfUser, TokenItem } from './src/types';
+import type { LogStat, NewApiStatus, SelfUser, TokenItem, UsageSummary } from './src/types';
 import { colors } from './src/theme';
 
 /** 一次成功刷新后落盘的看板快照，限流或排队时用它继续显示。 */
@@ -34,6 +35,7 @@ type DashboardSnapshot = {
   status: NewApiStatus | null;
   user: SelfUser | null;
   logStat: LogStat | null;
+  usage: UsageSummary | null;
   tokens: TokenItem[];
 };
 
@@ -59,6 +61,7 @@ function AppContent() {
   const [status, setStatus] = useState<NewApiStatus | null>(null);
   const [user, setUser] = useState<SelfUser | null>(null);
   const [logStat, setLogStat] = useState<LogStat | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [tokens, setTokens] = useState<TokenItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -84,6 +87,7 @@ function AppContent() {
     setStatus(null);
     setUser(null);
     setLogStat(null);
+    setUsage(null);
     setTokens([]);
     setDataSavedAt(null);
     setError('');
@@ -106,32 +110,47 @@ function AppContent() {
           setStatus(cached.data.status);
           setUser(cached.data.user);
           setLogStat(cached.data.logStat);
+          setUsage(cached.data.usage ?? null);
           setTokens(cached.data.tokens);
           setDataSavedAt(cached.savedAt);
         }
       }
       try {
         const client = new NewApiClient(activeSession.baseUrl, activeAccountId);
-        const [nextStatus, nextUser, nextTokens, nextStat] = await Promise.all([
+        const now = Math.floor(Date.now() / 1000);
+        const dayAgo = now - 24 * 60 * 60;
+        const [nextStatus, nextUser, nextTokens, nextStat, nextQuotaDates] = await Promise.all([
           client.getStatus(),
           client.getSelf(),
           client.getTokens(),
           client.getSelfLogStat(),
+          // 服务端不提供“近 24 小时 token / 请求次数”的现成字段，只能自己按小时行合计。
+          // 站点禁用该接口时不影响其它卡片，但限流与会话失效必须照样抛出去。
+          client.getQuotaDates(dayAgo, now).catch((extraError: unknown) => {
+            if (extraError instanceof RateLimitError || extraError instanceof SessionExpiredError) {
+              throw extraError;
+            }
+            // null 表示这一项拿不到，卡片显示 “-”，不要伪装成 0。
+            return null;
+          }),
         ]);
         if (ticket !== refreshTokenRef.current) {
           // 期间切了账号：这一批结果已经不属于当前界面。
           return;
         }
+        const nextUsage = nextQuotaDates ? summarizeUsage(nextQuotaDates, dayAgo) : null;
         setStatus(nextStatus);
         setUser(nextUser);
         setTokens(nextTokens);
         setLogStat(nextStat);
+        setUsage(nextUsage);
         setDataSavedAt(null);
         hasDataRef.current = true;
         void writeCache<DashboardSnapshot>(cacheKey(activeAccountId, SNAPSHOT_NAME), {
           status: nextStatus,
           user: nextUser,
           logStat: nextStat,
+          usage: nextUsage,
           tokens: nextTokens,
         });
         // Merge into whatever is stored now: a refresh triggered by one of the
@@ -308,6 +327,7 @@ function AppContent() {
       status={status}
       user={user}
       logStat={logStat}
+      usage={usage}
       tokens={tokens}
       accounts={accounts}
       activeAccountId={accountIdOf(session)}

@@ -94,6 +94,27 @@ export type LogStat = {
   tpm: number;
 };
 
+/** GET /api/data/self 返回的按小时聚合用量行。 */
+export type QuotaDateItem = {
+  id: number;
+  user_id: number;
+  model_name: string;
+  created_at: number;
+  use_group: string;
+  token_id: number;
+  channel_id: number;
+  node_name: string;
+  token_used: number;
+  count: number;
+  quota: number;
+};
+
+/** 一段时间内的 token 用量与请求次数合计。 */
+export type UsageSummary = {
+  tokenUsed: number;
+  count: number;
+};
+
 export type ApiEnvelope<T> = {
   success: boolean;
   message?: string;

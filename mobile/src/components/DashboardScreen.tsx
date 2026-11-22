@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -13,9 +13,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { accountIdOf, formatQuota, hostOf } from '../api';
 import type { StoredSession } from '../api';
 import { formatCacheAge } from '../cache';
+import { formatNumber } from '../format';
 import type { RateLimitStatus } from '../rate-limit';
-import type { LogStat, NewApiStatus, SelfUser, TokenItem, UsageSummary } from '../types';
+import type { LogStat, NewApiStatus, QuotaDateItem, SelfUser, TokenItem } from '../types';
+import { deriveUsage } from '../usage';
 import StatCard from './StatCard';
+import UsageBreakdown from './UsageBreakdown';
 import { colors, radius, spacing } from '../theme';
 
 export type DashboardScreenProps = {
@@ -23,8 +26,8 @@ export type DashboardScreenProps = {
   status: NewApiStatus | null;
   user: SelfUser | null;
   logStat: LogStat | null;
-  /** 近 24 小时的 token 用量与请求次数；接口不可用时为 null。 */
-  usage: UsageSummary | null;
+  /** 近 24 小时的按小时用量原始行；null 表示站点没返回这一项。 */
+  quotaDates: QuotaDateItem[] | null;
   tokens: TokenItem[];
   accounts: StoredSession[];
   activeAccountId: string | null;
@@ -66,20 +69,6 @@ function maskKey(key: string): string {
   return `${key.slice(0, 8)}...${key.slice(-4)}`;
 }
 
-/** 窄卡片上放不下七八位数，超过一万就折成 k/M，避免数字被截断看不清。 */
-function formatNumber(value: number): string {
-  if (!Number.isFinite(value)) {
-    return '-';
-  }
-  if (Math.abs(value) >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(2)}M`;
-  }
-  if (Math.abs(value) >= 10_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
-  }
-  return value.toLocaleString('zh-CN');
-}
-
 function formatTimestamp(timestamp: number): string {
   if (!timestamp) {
     return '永久';
@@ -94,7 +83,7 @@ export default function DashboardScreen({
   status,
   user,
   logStat,
-  usage,
+  quotaDates,
   tokens,
   accounts,
   activeAccountId,
@@ -114,6 +103,10 @@ export default function DashboardScreen({
   const used = formatQuota(user?.used_quota ?? 0, status);
   const consumed = formatQuota(logStat?.quota ?? 0, status);
   const degraded = Boolean(rateLimit?.limited || dataSavedAt !== null);
+  // 缓存里的原始行可能是一小时前的；派生时按当前时间重算窗口，
+  // 时间戳随之推进，和卡片上“近一小时”的说法对得上。
+  const derived = useMemo(() => deriveUsage(quotaDates ?? []), [quotaDates]);
+  const hasUsage = quotaDates !== null;
 
   function confirmRemove(accountId: string) {
     Alert.alert(
@@ -199,19 +192,37 @@ export default function DashboardScreen({
       <View style={styles.grid}>
         <StatCard
           label="近 24 小时 Token"
-          value={usage ? formatNumber(usage.tokenUsed) : '-'}
-          hint={usage ? '输入 + 输出' : '站点未开放用量接口'}
+          value={hasUsage ? formatNumber(derived.total.tokenUsed) : '-'}
+          hint={hasUsage ? '输入 + 输出' : '站点未开放用量接口'}
         />
         <StatCard
           label="近 24 小时请求"
-          value={usage ? formatNumber(usage.count) : '-'}
-          hint={usage ? '次' : '站点未开放用量接口'}
+          value={hasUsage ? formatNumber(derived.total.count) : '-'}
+          hint={hasUsage ? '次' : '站点未开放用量接口'}
+        />
+      </View>
+      <View style={styles.grid}>
+        <StatCard
+          label="近 1 小时 Token"
+          value={hasUsage ? formatNumber(derived.hour.tokenUsed) : '-'}
+          hint={hasUsage ? '输入 + 输出' : '站点未开放用量接口'}
+        />
+        <StatCard
+          label="近 1 小时请求"
+          value={hasUsage ? formatNumber(derived.hour.count) : '-'}
+          hint={hasUsage ? '次' : '站点未开放用量接口'}
         />
       </View>
       <View style={styles.grid}>
         <StatCard label="RPM" value={String(logStat?.rpm ?? 0)} hint="近 24 小时" />
         <StatCard label="TPM" value={String(logStat?.tpm ?? 0)} hint="近 24 小时" />
       </View>
+
+      <UsageBreakdown
+        models={derived.models}
+        hours={derived.hours}
+        empty={!hasUsage || derived.total.tokenUsed + derived.total.count === 0}
+      />
 
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>API 令牌</Text>

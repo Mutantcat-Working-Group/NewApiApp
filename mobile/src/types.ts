@@ -109,12 +109,6 @@ export type QuotaDateItem = {
   quota: number;
 };
 
-/** 一段时间内的 token 用量与请求次数合计。 */
-export type UsageSummary = {
-  tokenUsed: number;
-  count: number;
-};
-
 export type ApiEnvelope<T> = {
   success: boolean;
   message?: string;

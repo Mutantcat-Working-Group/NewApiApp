@@ -43,6 +43,9 @@ import type {
 import TokenManager from './TokenManager';
 import AccountSwitcher from './AccountSwitcher';
 import FittedText from './FittedText';
+import UsageBreakdown from './UsageBreakdown';
+import { formatNumber } from '../format';
+import { deriveUsage } from '../usage';
 import { formatCacheAge } from '../cache';
 import type { RateLimitStatus } from '../rate-limit';
 
@@ -160,25 +163,6 @@ function groupQuotaByDay(items: QuotaDateItem[]): DayUsage[] {
     .slice(0, 14);
 }
 
-/** 一段时间内的 token 用量与请求次数合计。 */
-type UsageSummary = {
-  tokenUsed: number;
-  count: number;
-};
-
-function summarizeUsage(items: QuotaDateItem[], since: number): UsageSummary {
-  let tokenUsed = 0;
-  let count = 0;
-  for (const item of items) {
-    if (item.created_at && item.created_at < since) {
-      continue;
-    }
-    tokenUsed += item.token_used ?? 0;
-    count += item.count ?? 0;
-  }
-  return { tokenUsed, count };
-}
-
 type FittedStatisticProps = {
   title: string;
   text: string;
@@ -228,11 +212,10 @@ export default function Dashboard({
   const [checkinBusy, setCheckinBusy] = useState(false);
   const dayUsage = groupQuotaByDay(quotaDates);
   const maxDayQuota = Math.max(0, ...dayUsage.map((entry) => entry.quota));
-  // 服务端没有“近 24 小时合计”字段，只能用 30 天用量里落在窗口内的行累加。
-  const recentUsage = useMemo(
-    () => summarizeUsage(quotaDates, Math.floor(Date.now() / 1000) - 24 * 60 * 60),
-    [quotaDates],
-  );
+  // 服务端没有「近 24 小时合计」字段，只能用 30 天用量里落在窗口内的行累加。
+  // 近一小时同理，窗口是字面滑动窗口，会跨两个整点桶。
+  const derived = useMemo(() => deriveUsage(quotaDates), [quotaDates]);
+  const hasUsage = quotaDates.length > 0;
   const todayCheckedIn = checkin?.stats?.checked_in_today ?? false;
   const activeSubscriptions = subscriptionSelf?.subscriptions ?? [];
 
@@ -463,7 +446,7 @@ export default function Dashboard({
       </Row>
 
       <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
           <Card title="近 24 小时" className="section-card" bordered={false} hoverable>
             <Row gutter={[16, 16]} align="stretch">
               <Col xs={24} sm={8} lg={24}>
@@ -473,13 +456,10 @@ export default function Dashboard({
                 />
               </Col>
               <Col xs={24} sm={8} lg={24}>
-                <FittedStatistic
-                  title="Token 用量"
-                  text={formatCount(recentUsage.tokenUsed)}
-                />
+                <FittedStatistic title="Token 用量" text={formatNumber(derived.total.tokenUsed)} />
               </Col>
               <Col xs={24} sm={8} lg={24}>
-                <FittedStatistic title="请求次数" text={formatCount(recentUsage.count)} />
+                <FittedStatistic title="请求次数" text={formatNumber(derived.total.count)} />
               </Col>
               <Col xs={24} sm={8} lg={24}>
                 <FittedStatistic title="RPM" text={formatCount(logStat?.rpm ?? 0)} />
@@ -490,7 +470,24 @@ export default function Dashboard({
             </Row>
           </Card>
         </Col>
-        <Col xs={24} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card title="近 1 小时" className="section-card" bordered={false} hoverable>
+            <Row gutter={[16, 16]} align="stretch">
+              <Col xs={24} sm={8} lg={24}>
+                <FittedStatistic title="Token 用量" text={formatNumber(derived.hour.tokenUsed)} />
+              </Col>
+              <Col xs={24} sm={8} lg={24}>
+                <FittedStatistic title="请求次数" text={formatNumber(derived.hour.count)} />
+              </Col>
+            </Row>
+            {!hasUsage ? (
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                站点未开放用量接口
+              </Typography.Paragraph>
+            ) : null}
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
           <Card
             title="每日签到"
             className="section-card"
@@ -534,7 +531,7 @@ export default function Dashboard({
             )}
           </Card>
         </Col>
-        <Col xs={24} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
           <Card title="邀请推广" className="section-card" bordered={false} hoverable>
             {affCode ? (
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -682,6 +679,12 @@ export default function Dashboard({
           ) : null}
         </Space>
       </Card>
+
+      <UsageBreakdown
+        models={derived.models}
+        hours={derived.hours}
+        empty={!hasUsage || derived.total.tokenUsed + derived.total.count === 0}
+      />
 
       <Card title="API 令牌" className="section-card" bordered={false} hoverable>
         <TokenManager
